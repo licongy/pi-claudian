@@ -12,7 +12,7 @@ via corepack).
 git clone https://github.com/licongy/pi-claudian.git
 cd pi-claudian
 pnpm install
-pnpm build
+pnpm typecheck
 ```
 
 Verify your environment:
@@ -26,11 +26,12 @@ pnpm format      # prettier --write . (fix formatting)
 ## Project layout
 
 - One publishable extension per directory under `packages/*`.
-- Each package builds its `index.ts` to `dist/` with `tsc` and is published to
-  npm so users can `pi install npm:<package-name>`.
-- Shared TypeScript config lives in `tsconfig.base.json`; each package extends it.
+- Each package publishes its `index.ts` **source** to npm; pi loads it via
+  [jiti](https://github.com/unjs/jiti), so there is no build or `dist/` step.
+- Shared TypeScript config lives in `tsconfig.base.json` (`noEmit`); each package
+  extends it. `tsc` is used only for type-checking.
 - `@earendil-works/pi-coding-agent` is a peer dependency (types only) — never
-  bundle it into a package's `dist/`.
+  bundle it into a package's published files.
 
 See [AGENTS.md](AGENTS.md) for the full conventions.
 
@@ -39,14 +40,16 @@ See [AGENTS.md](AGENTS.md) for the full conventions.
 1. Create `packages/<name>/` with an `index.ts` exporting a default factory
    `(pi: ExtensionAPI) => void | Promise<void>`.
 2. Copy the structure from an existing package (`packages/sync-title/` is a good
-   template): `package.json`, `tsconfig.json`, `README.md`.
-3. In `package.json`, include the `pi-package` keyword and a `pi` manifest so pi
-   can load the extension and pi.dev/packages can discover it:
+   template): `package.json`, `tsconfig.json`, `README.md`, and a `debug.ts`
+   helper.
+3. In `package.json`, point the `pi` manifest at the `.ts` source, include the
+   `pi-package` keyword, and list the source files (no `dist/`):
 
    ```json
    {
      "keywords": ["pi-package", "pi-extension"],
-     "pi": { "extensions": ["./dist/index.js"] }
+     "pi": { "extensions": ["./index.ts"] },
+     "files": ["index.ts", "debug.ts", "README.md"]
    }
    ```
 
@@ -57,7 +60,19 @@ See [AGENTS.md](AGENTS.md) for the full conventions.
 - Keep a change focused — one feature or fix per pull request.
 - Follow the existing code style (enforced by Prettier). Run `pnpm format`.
 - Don't add comments unless they explain non-obvious intent.
+- For diagnostic output, use the `debug.ts` helper (gated on `PI_CLAUDIAN_DEBUG`)
+  rather than raw `console.log`.
 - Before opening a PR, ensure `pnpm typecheck` and `pnpm lint` pass.
+
+## Debugging
+
+Enable debug logging for all `@pi-claudian` extensions with one environment
+variable (output goes to stderr so it never mixes with pi's stdout):
+
+```sh
+PI_CLAUDIAN_DEBUG=1 pi              # show debug output inline
+PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
+```
 
 ## Releases
 

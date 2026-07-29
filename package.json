@@ -25,13 +25,12 @@
     "monorepo"
   ],
   "scripts": {
-    "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "lint": "prettier --check .",
     "format": "prettier --write .",
     "changeset": "changeset",
     "version": "changeset version",
-    "release": "pnpm build && changeset publish"
+    "release": "changeset publish"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.12",

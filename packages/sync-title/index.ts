@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { debug } from "./debug.js";
 
 /**
  * @pi-claudian/sync-title
@@ -58,10 +59,12 @@ export default function (pi: ExtensionAPI) {
     sessionFile: string | null,
   ): Promise<{ meta: ClaudianMeta; file: string } | null> {
     const dir = claudianSessionsDir();
+    debug("scanning", dir, "for session", sessionId);
     let files: string[] = [];
     try {
       files = await fs.readdir(dir);
     } catch {
+      debug("sessions dir missing — not a Claudian environment");
       return null; // .claudian/sessions missing (not a Claudian environment)
     }
 
@@ -79,6 +82,7 @@ export default function (pi: ExtensionAPI) {
 
       // Primary match: exact pi session UUID
       if (meta.sessionId && meta.sessionId === sessionId) {
+        debug("matched by sessionId:", fullPath);
         return { meta, file: fullPath };
       }
 
@@ -88,6 +92,7 @@ export default function (pi: ExtensionAPI) {
         meta.providerState?.sessionFile &&
         meta.providerState.sessionFile === sessionFile
       ) {
+        debug("matched by sessionFile fallback:", fullPath);
         fileFallback = { meta, file: fullPath };
       }
     }
@@ -100,25 +105,41 @@ export default function (pi: ExtensionAPI) {
    */
   async function syncTitleFromClaudian(ctx: ExtensionContext, isRetry = false): Promise<boolean> {
     const sessionId = ctx.sessionManager.getSessionId();
-    if (!sessionId) return true; // ephemeral session, nothing to sync
+    if (!sessionId) {
+      debug("no session id — ephemeral session, skipping");
+      return true; // ephemeral session, nothing to sync
+    }
 
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
 
     const found = await findMetaForSession(sessionId, sessionFile);
-    if (!found) return true; // not a Claudian-originated session (e.g. a plain TUI session)
+    if (!found) {
+      debug("no matching Claudian meta — not a Claudian session");
+      return true; // not a Claudian-originated session (e.g. a plain TUI session)
+    }
 
     const { meta } = found;
     const title = meta.title?.trim();
 
     // Title not ready yet (Claudian is calling the small model) -> hand off to retry
     if (!title) {
+      debug(
+        "title not ready (status:",
+        meta.titleGenerationStatus ?? "?",
+        ") —",
+        isRetry ? "giving up" : "scheduling retry",
+      );
       if (!isRetry) scheduleRetry(ctx, sessionId);
       return false;
     }
 
     // Idempotent: skip if the name already matches
-    if (pi.getSessionName() === title) return true;
+    if (pi.getSessionName() === title) {
+      debug("title already matches, no write needed");
+      return true;
+    }
 
+    debug("writing session name:", title);
     pi.setSessionName(title); // write the session_info entry, immediately visible in /resume
     ctx.ui.notify(`[Title Sync] Synced Claudian title: "${title}"`, "info");
     return true;
@@ -126,11 +147,13 @@ export default function (pi: ExtensionAPI) {
 
   function scheduleRetry(ctx: ExtensionContext, sessionId: string) {
     if (pendingRetries.has(sessionId)) return; // a retry is already queued
+    debug("scheduling retry in", RETRY_DELAY_MS, "ms for", sessionId);
     const timer = setTimeout(async () => {
       pendingRetries.delete(sessionId);
       try {
         await syncTitleFromClaudian(ctx, true);
-      } catch {
+      } catch (e) {
+        debug("retry failed:", String(e));
         /* retry failed silently; wait for the next agent_end */
       }
     }, RETRY_DELAY_MS);
@@ -139,9 +162,11 @@ export default function (pi: ExtensionAPI) {
 
   // 1. Try to sync after each reply ends (first turn usually has no title yet -> auto 10s retry)
   pi.on("agent_end", async (_event: AgentEndEvent, ctx: ExtensionContext) => {
+    debug("agent_end — attempting sync");
     try {
       await syncTitleFromClaudian(ctx);
-    } catch {
+    } catch (e) {
+      debug("agent_end sync error:", String(e));
       /* ignore transient errors */
     }
   });
@@ -152,6 +177,7 @@ export default function (pi: ExtensionAPI) {
       "Manually sync the Claudian conversation title from .claudian/sessions metadata into the pi session name",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
+        debug("manual /sync-title invoked");
         const done = await syncTitleFromClaudian(ctx);
         if (!done) {
           ctx.ui.notify(
@@ -160,6 +186,7 @@ export default function (pi: ExtensionAPI) {
           );
         }
       } catch (e) {
+        debug("/sync-title failed:", String(e));
         ctx.ui.notify(`[Title Sync] Sync failed: ${String(e)}`, "error");
       }
     },

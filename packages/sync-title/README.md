@@ -32,6 +32,19 @@ retry if Claudian has not generated the title yet).
 - Idempotent: skips writing when the name already matches.
 - Silent no-op outside of a Claudian-managed vault (e.g. plain TUI sessions).
 
+## Debug
+
+Trace matching, retries, and writes by enabling the shared `@pi-claudian` debug
+switch (output goes to stderr):
+
+```sh
+PI_CLAUDIAN_DEBUG=1 pi              # show debug output inline
+PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
+```
+
+Look for `[pi-claudian]`-tagged lines such as `writing session name: <title>` or
+`title not ready ... scheduling retry`.
+
 ## License
 
 MIT

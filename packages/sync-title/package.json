@@ -1,6 +1,6 @@
 {
   "name": "@pi-claudian/sync-title",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Pi extension that syncs Claudian conversation titles into pi session names so they show up in /resume.",
   "type": "module",
   "license": "MIT",
@@ -28,25 +28,16 @@
   ],
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./index.ts"
     ]
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
   "files": [
-    "dist",
+    "index.ts",
+    "debug.ts",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm run build"
+    "typecheck": "tsc --noEmit"
   },
   "publishConfig": {
     "access": "public"
