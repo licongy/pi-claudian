@@ -1,0 +1,55 @@
+{
+  "name": "@pi-claudian/sync-title",
+  "version": "0.1.0",
+  "description": "Pi extension that syncs Claudian conversation titles into pi session names so they show up in /resume.",
+  "type": "module",
+  "license": "MIT",
+  "author": "licongy",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/licongy/pi-claudian.git",
+    "directory": "packages/sync-title"
+  },
+  "homepage": "https://github.com/licongy/pi-claudian/tree/master/packages/sync-title#readme",
+  "bugs": {
+    "url": "https://github.com/licongy/pi-claudian/issues"
+  },
+  "keywords": [
+    "pi",
+    "claudian",
+    "pi-extension",
+    "sync",
+    "title",
+    "session"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.82.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.82.1",
+    "@types/node": "^22.10.0"
+  }
+}

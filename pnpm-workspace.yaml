@@ -1,0 +1,12 @@
+packages:
+  - "packages/*"
+
+# pnpm v11 build-script policy. This repo only consumes
+# `@earendil-works/pi-coding-agent` for TypeScript types and builds its own
+# packages with `tsc`, so transitive postinstall scripts are intentionally not
+# run. Listing them here marks them as reviewed so install exits cleanly
+# (strictDepBuilds is on by default). `pnpm install` will append new candidates
+# here automatically for review if upstream deps change.
+allowBuilds:
+  "@google/genai": false
+  protobufjs: false

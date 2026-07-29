@@ -1,20 +1,41 @@
 {
   "name": "pi-claudian",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "0.0.0",
+  "description": "A monorepo of independently-published pi extensions for collaborating with Claudian.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "licongy",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/licongy/pi-claudian.git"
+  },
+  "homepage": "https://github.com/licongy/pi-claudian#readme",
+  "bugs": {
+    "url": "https://github.com/licongy/pi-claudian/issues"
+  },
+  "keywords": [
+    "pi",
+    "claudian",
+    "pi-extension",
+    "monorepo"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": "^11.15.1",
-      "onFail": "download"
-    }
-  },
-  "type": "module"
+  "devDependencies": {
+    "@changesets/cli": "^2.27.12",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
 }
