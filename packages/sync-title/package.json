@@ -1,7 +1,7 @@
 {
   "name": "@pi-claudian/sync-title",
-  "version": "0.1.2",
-  "description": "Pi extension that syncs Claudian conversation titles into pi session names so they show up in /resume.",
+  "version": "0.1.3",
+  "description": "Pi extension that syncs Claudian conversation titles and pi session names.",
   "type": "module",
   "license": "MIT",
   "author": "licongy",
