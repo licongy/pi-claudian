@@ -38,6 +38,20 @@ pnpm release      # build all packages and publish to npm
 
 See [`.changeset/README.md`](.changeset/README.md) for details.
 
+## Contributing
+
+Contributions are welcome — bug reports, feature ideas, new extensions, or fixes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+Quick links:
+
+- [Open an issue](https://github.com/licongy/pi-claudian/issues)
+- [Start a discussion](https://github.com/licongy/pi-claudian/discussions)
+- Look for [`good first issue`](https://github.com/licongy/pi-claudian/labels/good%20first%20issue) / [`help wanted`](https://github.com/licongy/pi-claudian/labels/help%20wanted) labels
+
+New to the codebase? [`packages/sync-title`](packages/sync-title) is a minimal,
+up-to-date template to copy when adding an extension.
+
 ## License
 
 [MIT](LICENSE)

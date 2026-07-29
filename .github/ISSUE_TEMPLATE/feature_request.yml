@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a new extension, feature, or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point or unmet need. Is it tied to an existing package or a new one?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What would you like to see happen? A sketch is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other approaches you've tried.
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Would you be willing to help build this?
+      options:
+        - "Yes, I'd like to work on it"
+        - "Maybe — needs discussion first"
+        - "No, just suggesting"
+    validations:
+      required: true
