@@ -4,7 +4,11 @@
   "description": "Pi extension that syncs Claudian conversation titles and pi session names.",
   "type": "module",
   "license": "MIT",
-  "author": "licongy",
+  "author": {
+    "name": "Licong Yang",
+    "email": "licong.yang@icloud.com",
+    "url": "https://github.com/licongy"
+  },
   "engines": {
     "node": ">=20"
   },

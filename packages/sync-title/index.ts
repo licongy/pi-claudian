@@ -1,3 +1,51 @@
+/**
+ * @pi-claudian/sync-title
+ *
+ * Two-way sync between Claudian conversation titles and Pi session names.
+ *
+ * Claudian auto-generates conversation titles but never tells Pi about them,
+ * and Pi's `/name` command never tells Claudian. This extension closes that
+ * gap in both directions, with conflict resolution that never silently
+ * overwrites a name you set yourself.
+ *
+ * How it works:
+ * - Claudian stores conversation metadata in `.claudian/sessions/conv-*.meta.json`.
+ *   The filename is Claudian's conversationId (conv-xxx), not Pi's session UUID.
+ * - Meta fields:
+ *     meta.id                        = Claudian conversationId
+ *     meta.title                     = Claudian auto-generated title
+ *                                     (produced asynchronously after the first reply)
+ *     meta.titleGenerationStatus     = "pending" | "success" | ...
+ *     meta.sessionId                 = Pi session UUID (may be null when not running)
+ *     meta.providerState.sessionFile = absolute path to the Pi session jsonl
+ * - On the Pi side, the session name is written into the jsonl's session_info
+ *   entry via pi.setSessionName() and shown in the /resume list.
+ *
+ * Two-way sync strategy (single decision table in reconcile()):
+ *
+ *   trigger                  Pi name   Claudian title   action
+ *   -----------------------  --------  ---------------  ---------------------------
+ *   any                      empty     empty            nothing (retry if "pending")
+ *   any                      empty     ready            Claudian -> Pi
+ *   any                      ready     empty            Pi -> Claudian (unless "pending")
+ *   any                      ready     same             no-op
+ *   agent_end (automatic)    ready     different        notify only (never auto-overwrite)
+ *   /name or /sync-title     ready     different        prompt: Pi->C / C->Pi / keep / cancel
+ *
+ * Matching: first exact-match by sessionId, then fall back to the sessionFile path.
+ * Reentrancy: pi.setSessionName() re-emits session_info_changed synchronously
+ * (agent-session.js), so writes performed by this extension are guarded by a
+ * self-write flag to avoid re-entering the decision table.
+ *
+ * Installation:
+ *   pi install npm:@pi-claudian/sync-title
+ *
+ * Usage:
+ *   - Automatic: after each agent turn the two titles are reconciled
+ *   - Manual: run /sync-title to reconcile on demand
+ *   - Debug: PI_CLAUDIAN_DEBUG=1 pi
+ */
+
 import type {
   AgentEndEvent,
   ExtensionAPI,
@@ -8,40 +56,6 @@ import type {
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
-
-/**
- * @pi-claudian/sync-title
- *
- * How it works (verified):
- * - Claudian stores conversation metadata in the vault's
- *   .claudian/sessions/conv-*.meta.json. The filename is Claudian's
- *   conversationId (conv-xxx), not pi's session UUID.
- * - Meta fields:
- *     meta.id                        = Claudian conversationId
- *     meta.title                     = Claudian auto-generated title
- *                                     (produced asynchronously after the first reply)
- *     meta.titleGenerationStatus     = "pending" | "success" | ...
- *     meta.sessionId                 = pi session UUID (may be null when not running)
- *     meta.providerState.sessionFile = absolute path to the pi session jsonl
- * - On the pi side, the session name is written into the jsonl's session_info
- *   entry via pi.setSessionName() and shown in the /resume list.
- *
- * Two-way sync strategy (single decision table in reconcile()):
- *
- *   trigger                  pi name   Claudian title   action
- *   -----------------------  --------  ---------------  ---------------------------
- *   any                      empty     empty            nothing (retry if "pending")
- *   any                      empty     ready            Claudian -> pi
- *   any                      ready     empty            pi -> Claudian (unless "pending")
- *   any                      ready     same             no-op
- *   agent_end (automatic)    ready     different        notify only (never auto-overwrite)
- *   /name or /sync-title     ready     different        prompt: pi->C / C->pi / cancel
- *
- * Matching: first exact-match by sessionId, then fall back to the sessionFile path.
- * Reentrancy: pi.setSessionName() re-emits session_info_changed synchronously
- * (agent-session.js), so writes performed by this extension are guarded by a
- * self-write flag to avoid re-entering the decision table.
- */
 
 const RETRY_DELAY_MS = 10_000;
 
@@ -64,7 +78,7 @@ export default function (pi: ExtensionAPI) {
   let selfWritingName = false;
 
   function claudianSessionsDir(): string {
-    // Claudian starts pi with the vault root as cwd
+    // Claudian starts Pi with the vault root as cwd
     return path.join(process.cwd(), ".claudian", "sessions");
   }
 
@@ -94,7 +108,7 @@ export default function (pi: ExtensionAPI) {
         continue; // skip corrupt / mid-write files
       }
 
-      // Primary match: exact pi session UUID
+      // Primary match: exact Pi session UUID
       if (meta.sessionId && meta.sessionId === sessionId) {
         debug("matched by sessionId:", fullPath);
         return { meta, file: fullPath };
@@ -126,7 +140,7 @@ export default function (pi: ExtensionAPI) {
     debug("wrote claudian meta:", file, patch);
   }
 
-  /** Set the pi session name while arming the reentrancy guard. */
+  /** Set the Pi session name while arming the reentrancy guard. */
   function applySessionName(name: string) {
     selfWritingName = true;
     pi.setSessionName(name);
@@ -142,7 +156,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Single decision table for both sync directions. Resolves the pi session name against the
+   * Single decision table for both sync directions. Resolves the Pi session name against the
    * Claudian conversation title, writing whichever side is empty and prompting the
    * user (when interactive) on conflicts.
    *
@@ -168,7 +182,7 @@ export default function (pi: ExtensionAPI) {
     const cTitle = meta.title?.trim() || undefined;
     const pending = meta.titleGenerationStatus === "pending";
 
-    // --- pi name empty: only Claudian -> pi is possible ---
+    // --- Pi name empty: only Claudian -> Pi is possible ---
     if (!piName) {
       if (!cTitle) {
         if (pending) {
@@ -183,18 +197,18 @@ export default function (pi: ExtensionAPI) {
         }
         return true; // both genuinely empty, nothing to do
       }
-      // Claudian has a title, pi does not -> write it through
+      // Claudian has a title, Pi does not -> write it through
       debug("writing session name from Claudian:", cTitle);
       applySessionName(cTitle);
       ctx.ui.notify(`[Title Sync] Synced Claudian title: "${cTitle}"`, "info");
       return true;
     }
 
-    // --- pi name non-empty from here ---
+    // --- Pi name non-empty from here ---
     if (!cTitle) {
-      // pi -> Claudian, unless Claudian is mid-generation
+      // Pi -> Claudian, unless Claudian is mid-generation
       if (pending) {
-        debug("Claudian title still pending; not writing pi name back");
+        debug("Claudian title still pending; not writing Pi name back");
         ctx.ui.notify(
           "[Title Sync] Claudian is still generating its title; try again shortly",
           "info",
@@ -206,47 +220,56 @@ export default function (pi: ExtensionAPI) {
         title: piName,
         titleGenerationStatus: "success",
       });
-      ctx.ui.notify(`[Title Sync] Synced pi name to Claudian: "${piName}"`, "info");
+      ctx.ui.notify(`[Title Sync] Synced Pi name to Claudian: "${piName}"`, "info");
       return true;
     }
 
     // --- both non-empty ---
     if (piName === cTitle) {
-      debug("title already matches, no write needed");
+      debug("name and title already matches, no write needed");
       return true;
     }
 
     // Conflict: never auto-overwrite a user-named session.
     if (opts.interactive && ctx.hasUI) {
       debug("conflict — prompting user; pi:", piName, "claudian:", cTitle);
-      const choice = await ctx.ui.select("Title conflict", [
-        `Overwrite Claudian with pi name ("${piName}")`,
-        `Overwrite pi name with Claudian ("${cTitle}")`,
+      const message =
+        "Session name conflict detected\n\n" +
+        `Claudian title: "${cTitle}"\n` +
+        `Pi name:        "${piName}"\n\n` +
+        "Choose how to resolve:";
+      const choice = await ctx.ui.select(message, [
+        "Overwrite Claudian title with Pi name",
+        "Overwrite Pi name with Claudian title",
+        "Keep both unchanged (no sync)",
         "Cancel",
       ]);
       if (choice === undefined) {
         return true; // dialog dismissed
       }
-      if (choice.startsWith("Overwrite Claudian")) {
+      if (choice.startsWith("Overwrite Claudian title")) {
         await writeClaudianMeta(file, meta, {
           title: piName,
           titleGenerationStatus: "success",
         });
         ctx.ui.notify(`[Title Sync] Overwrote Claudian title with: "${piName}"`, "info");
-      } else if (choice.startsWith("Overwrite pi name")) {
-        debug("overwriting pi name with Claudian:", cTitle);
+      } else if (choice.startsWith("Overwrite Pi name")) {
+        debug("overwriting Pi name with Claudian:", cTitle);
         applySessionName(cTitle);
-        ctx.ui.notify(`[Title Sync] Overwrote pi name with: "${cTitle}"`, "info");
+        ctx.ui.notify(`[Title Sync] Overwrote Pi name with: "${cTitle}"`, "info");
+      } else if (choice.startsWith("Keep both")) {
+        debug("keeping both unchanged; Pi:", piName, "claudian:", cTitle);
+        ctx.ui.notify(`[Title Sync] Kept both:Pi "${piName}", Claudian "${cTitle}"`, "info");
       } else {
         ctx.ui.notify("[Title Sync] Skipped (cancelled)", "info");
       }
       return true;
     }
 
-    // Automatic trigger with a conflict: notify only, keep the existing pi name.
-    debug("conflict on automatic trigger — notifying, keeping pi name:", piName);
+    // Automatic trigger with a conflict: notify only, keep the existing Pi name.
+    debug("conflict on automatic trigger — notifying, keeping Pi name:", piName);
     ctx.ui.notify(
-      `[Title Sync] pi name "${piName}" differs from Claudian "${cTitle}"; kept pi name`,
+      `[Title Sync] Pi name "${piName}" differs from Claudian "${cTitle}"; kept Pi name`,
       "info",
     );
     return true;
@@ -279,7 +302,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // 2. After the user names a session (/name): bias toward pi -> Claudian, prompt
+  // 2. After the user names a session (/name): bias toward Pi -> Claudian, prompt
   //    on conflict. The self-write guard short-circuits events this extension caused.
   pi.on("session_info_changed", async (event: SessionInfoChangedEvent, ctx: ExtensionContext) => {
     if (selfWritingName) {
@@ -303,7 +326,7 @@ export default function (pi: ExtensionAPI) {
   // 3. Manual trigger: /sync-title (interactive — may prompt on conflict)
   pi.registerCommand("sync-title", {
     description:
-      "Two-way sync between the pi session name and the Claudian conversation title (.claudian/sessions metadata)",
+      "Two-way sync between the Pi session name and the Claudian conversation title (.claudian/sessions metadata)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /sync-title invoked");
