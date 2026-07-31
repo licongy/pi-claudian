@@ -43,9 +43,15 @@ Automatic:
 
 Manual: run **`/sync-session`** to re-sync the current leaf on demand.
 
+**The sync summary** — after `/tree`, `/fork`, or `/sync-session` the result is
+shown as a multi-line list of the session(s) affected (here a `/sync-session`
+that was already in sync). No operation is silent:
+
+![Pi TUI showing the sync-session command and a multi-line summary listing the synced session with its id and name](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/sync-session/screenshot.png)
+
 ## Behavior
 
-- Matches the Claudian meta file by Pi session UUID first, falling back to the
+- Matches the Claudian meta file by Pi session id first, falling back to the
   `providerState.sessionFile` path.
 - Fork conversations inherit the source title so they are identifiable
   immediately; `@pi-claudian/sync-title` reconciles the Pi name on the next turn.
@@ -59,11 +65,15 @@ Manual: run **`/sync-session`** to re-sync the current leaf on demand.
 
 ### Claudian → Pi (fork conversion)
 
-This extension intentionally does **not** sync Claudian-side forks back into Pi.
-Claudian owns the Pi-session lifecycle for its own conversations and performs
-fork conversion in its own process (creating the Pi session file there). A
-session-scoped Pi extension cannot reliably observe Claudian-side forks, and
-duplicating that conversion would race with Claudian.
+This extension does not sync Claudian-side forks back into Pi — there is no
+need. When Claudian forks a Pi-based conversation it already creates the Pi
+session file (and the matching `.claudian/sessions` conversation), so the Pi
+side is already up to date after a Claudian fork.
+
+For background: Claudian owns the Pi-session lifecycle for its own conversations
+and performs fork conversion in its own process, where a session-scoped Pi
+extension cannot reliably observe it. This extension therefore focuses on the
+opposite direction (Pi → Claudian), which Claudian does not do itself.
 
 ## Debug
 

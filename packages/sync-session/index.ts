@@ -31,11 +31,13 @@
  *   and pointing at the new sessionFile/sessionId/leafEntryId.
  * - `/sync-session`: re-syncs the current leaf on demand.
  *
- * Claudian -> pi fork conversion is intentionally NOT handled here: Claudian
- * owns the pi-session lifecycle for its own conversations and performs fork
- * conversion in its own process (where it creates the pi session file). A
- * session-scoped pi extension cannot reliably observe Claudian-side forks, and
- * duplicating that conversion would race with Claudian.
+ * Claudian -> pi fork conversion is not handled here — there is no need:
+ * Claudian already creates the pi session file (and its conv meta) when it
+ * forks a pi-based conversation, so the pi side is already up to date. Claudian
+ * owns the pi-session lifecycle for its own conversations and performs that
+ * conversion in its own process, where a session-scoped pi extension cannot
+ * reliably observe it. This extension therefore only does the opposite
+ * direction (pi -> Claudian), which Claudian does not do itself.
  *
  * Matching: by pi sessionId first, falling back to the sessionFile path.
  * Writes are atomic (tmp + rename) so Claudian never reads a half-written file.
@@ -199,38 +201,75 @@ export default function (pi: ExtensionAPI) {
     return `conv-${Date.now()}-${suffix}`;
   }
 
+  /** A structured result from a sync operation, turned into a TUI notification. */
+  interface SyncOutcome {
+    message: string;
+    type: "info" | "warning" | "error";
+  }
+  /** One entry in a synced-sessions summary list. */
+  interface SyncItem {
+    id: string;
+    name?: string;
+    detail?: string;
+  }
+
+  /** Display label for a session: "id (name)" when named, else just "id". */
+  function sessionLabel(id: string, name?: string): string {
+    return name ? `${id} (${name})` : id;
+  }
+
+  /** Build a multi-line "Synced N session(s) to Claudian" summary body for the TUI. */
+  function summarizeSynced(items: SyncItem[], action = "Synced"): string {
+    const n = items.length;
+    const noun = n === 1 ? "session" : "sessions";
+    const lines = [`${action} ${n} ${noun} to Claudian:`];
+    for (const it of items) {
+      lines.push(`  • ${sessionLabel(it.id, it.name)}`);
+      if (it.detail) lines.push(`      ${it.detail}`);
+    }
+    return lines.join("\n");
+  }
+
+  function outcome(message: string, type: SyncOutcome["type"] = "info"): SyncOutcome {
+    return { message: `[Session Sync] ${message}`, type };
+  }
+
   /**
    * Sync the current pi leaf into the Claudian conversation that backs this
    * session. Used by `session_tree` and the manual `/sync-session` command.
-   *
-   * @returns a short status string for user notification.
    */
-  async function syncLeaf(ctx: ExtensionContext): Promise<string> {
+  async function syncLeaf(ctx: ExtensionContext): Promise<SyncOutcome> {
     const sessionId = ctx.sessionManager.getSessionId();
     if (!sessionId) {
       debug("no session id — ephemeral session, skipping leaf sync");
-      return "ephemeral session, nothing to sync";
+      return outcome("no active session — nothing to sync");
     }
+    const name = ctx.sessionManager.getSessionName();
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
     const leafId = ctx.sessionManager.getLeafId();
 
     const found = await findMeta(sessionId, sessionFile);
     if (!found) {
       debug("no matching Claudian meta — not a Claudian session");
-      return "not a Claudian session";
+      return outcome("not a Claudian session — nothing to sync", "warning");
     }
 
     const { meta, file } = found;
     // Only pi-provider conversations are meaningful here.
     if (meta.providerId && meta.providerId !== CLAUDIAN_PROVIDER_PI) {
       debug("non-pi provider conversation:", meta.providerId);
-      return `provider is ${meta.providerId}, not pi`;
+      return outcome(`provider is ${meta.providerId}, not pi — skipped`, "warning");
     }
 
     const currentLeaf = meta.providerState?.leafEntryId ?? null;
     if (leafId === currentLeaf) {
       debug("leaf already in sync:", leafId);
-      return `already in sync (leaf ${leafId ?? "null"})`;
+      return outcome(
+        summarizeSynced(
+          [{ id: sessionId, name, detail: `leaf already in sync (${leafId ?? "null"})` }],
+          "Already synced",
+        ),
+      );
     }
 
     const providerState: ClaudianProviderState = {
@@ -241,7 +280,11 @@ export default function (pi: ExtensionAPI) {
     };
     await patchMeta(file, meta, { providerState });
     debug("synced leaf:", currentLeaf, "->", leafId);
-    return `synced leaf ${currentLeaf ?? "null"} -> ${leafId ?? "null"}`;
+    return outcome(
+      summarizeSynced([
+        { id: sessionId, name, detail: `leaf ${currentLeaf ?? "null"} → ${leafId ?? "null"}` },
+      ]),
+    );
   }
 
   /**
@@ -249,18 +292,19 @@ export default function (pi: ExtensionAPI) {
    * source conversation by previousSessionFile and create a new Claudian
    * conversation pointing at the forked session.
    */
-  async function syncFork(event: SessionStartEvent, ctx: ExtensionContext): Promise<string> {
+  async function syncFork(event: SessionStartEvent, ctx: ExtensionContext): Promise<SyncOutcome> {
     const previousSessionFile = event.previousSessionFile;
     if (!previousSessionFile) {
       debug("fork without previousSessionFile — cannot locate source conversation");
-      return "no source session to fork from";
+      return outcome("no source session to fork from", "warning");
     }
 
     const newSessionId = ctx.sessionManager.getSessionId();
     if (!newSessionId) {
       debug("forked session has no id — skipping");
-      return "forked session has no id";
+      return outcome("forked session has no id", "warning");
     }
+    const newName = ctx.sessionManager.getSessionName();
 
     // Idempotency: a Claudian conversation may already exist for the new
     // session (e.g. Claudian's own fork conversion, or a re-fired event).
@@ -274,7 +318,7 @@ export default function (pi: ExtensionAPI) {
     const source = await findMetaBySessionFile(previousSessionFile);
     if (!source) {
       debug("source session is not a Claudian conversation — not creating a fork meta");
-      return "source is not a Claudian conversation";
+      return outcome("source is not a Claudian conversation — nothing to sync", "warning");
     }
 
     const src = source.meta;
@@ -303,17 +347,58 @@ export default function (pi: ExtensionAPI) {
     const file = path.join(claudianSessionsDir(), `${convId}.meta.json`);
     await writeMeta(file, forked);
     debug("created fork conversation:", convId, "from", src.id);
-    return `created Claudian conversation ${convId} for forked session`;
+    const sourceLabel = src.title ? `"${src.title}"` : (src.id ?? previousSessionFile);
+    return outcome(
+      summarizeSynced([
+        {
+          id: newSessionId,
+          name: newName,
+          detail: `created conversation ${convId} (forked from ${sourceLabel})`,
+        },
+      ]),
+    );
+  }
+
+  const SYNC_WIDGET_KEY = "pi-claudian-sync";
+  const WIDGET_CLEAR_MS = 15000;
+  let widgetTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Show the sync result. Pi's own follow-up status after /tree ("Navigated to
+   * selected point") and /fork ("Forked to new session") replaces the last chat
+   * status line — and /tree also re-renders the chat — so an info `notify` sent
+   * from `session_tree`/`session_start` gets overwritten before it can be read.
+   * A widget lives in a separate container that pi does not touch, so it is the
+   * reliable channel for automatic triggers. Manual `/sync-session` has no such
+   * follow-up, so it uses a persistent status line instead.
+   */
+  function presentOutcome(ctx: ExtensionContext, o: SyncOutcome, transient: boolean): void {
+    if (o.type === "error" || !transient) {
+      ctx.ui.notify(o.message, o.type);
+      return;
+    }
+    if (widgetTimer) clearTimeout(widgetTimer);
+    const lines = o.message.split("\n");
+    lines[0] = `${lines[0]} (this message will auto-dismiss shortly)`;
+    ctx.ui.setWidget(SYNC_WIDGET_KEY, lines);
+    widgetTimer = setTimeout(() => {
+      widgetTimer = undefined;
+      try {
+        ctx.ui.setWidget(SYNC_WIDGET_KEY, undefined);
+      } catch (e) {
+        debug("widget clear failed (stale ctx):", String(e));
+      }
+    }, WIDGET_CLEAR_MS);
   }
 
   // 1. /tree navigation: write the new leaf into Claudian's metadata.
   pi.on("session_tree", async (event: SessionTreeEvent, ctx: ExtensionContext) => {
     debug("session_tree — newLeaf:", event.newLeafId, "oldLeaf:", event.oldLeafId);
     try {
-      const status = await syncLeaf(ctx);
-      ctx.ui.notify(`[Session Sync] ${status}`, "info");
+      presentOutcome(ctx, await syncLeaf(ctx), true);
     } catch (e) {
       debug("session_tree sync error:", String(e));
+      presentOutcome(ctx, outcome(`tree sync failed: ${String(e)}`, "error"), true);
     }
   });
 
@@ -322,25 +407,24 @@ export default function (pi: ExtensionAPI) {
     if (event.reason !== "fork") return;
     debug("session_start (fork) — previousSessionFile:", event.previousSessionFile);
     try {
-      const status = await syncFork(event, ctx);
-      ctx.ui.notify(`[Session Sync] ${status}`, "info");
+      presentOutcome(ctx, await syncFork(event, ctx), true);
     } catch (e) {
       debug("fork sync error:", String(e));
+      presentOutcome(ctx, outcome(`fork sync failed: ${String(e)}`, "error"), true);
     }
   });
 
   // 3. Manual: re-sync the current leaf on demand.
   pi.registerCommand("sync-session", {
     description:
-      "Sync the pi session tree position (leaf) and any fork into Claudian's session metadata (.claudian/sessions)",
+      "Sync the Pi session tree position (leaf) and any fork into Claudian's session metadata (.claudian/sessions)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /sync-session invoked");
-        const status = await syncLeaf(ctx);
-        ctx.ui.notify(`[Session Sync] ${status}`, "info");
+        presentOutcome(ctx, await syncLeaf(ctx), false);
       } catch (e) {
         debug("/sync-session failed:", String(e));
-        ctx.ui.notify(`[Session Sync] failed: ${String(e)}`, "error");
+        presentOutcome(ctx, outcome(`sync failed: ${String(e)}`, "error"), false);
       }
     },
   });

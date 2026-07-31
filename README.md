@@ -54,6 +54,18 @@ pnpm release      # publish all changed packages to npm
 
 See [`.changeset/README.md`](.changeset/README.md) for details.
 
+> Both `pnpm version` and `pnpm release` require a clean working tree
+> (`scripts/check-clean.mjs`). This prevents publishing from a state that the
+> release's git tag does not point at — the most common cause is forgetting to
+> commit source/changeset files before versioning, or the version bump before
+> publishing. Typical flow:
+>
+> ```sh
+> pnpm changeset && git add -A && git commit -m "add changeset"  # commit the change + changeset
+> pnpm version && git add -A && git commit -m "version packages"  # commit the version bump
+> pnpm release                                                   # clean tree -> tag lands on the published code
+> ```
+
 ## Contributing
 
 Contributions are welcome — bug reports, feature ideas, new extensions, or fixes.

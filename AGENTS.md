@@ -43,3 +43,8 @@ Per-package equivalents exist (e.g. `pnpm --filter @pi-claudian/sync-title typec
 
 Uses Changesets. Add a changeset (`pnpm changeset`) for any user-facing change,
 then `pnpm version` and `pnpm release`. Each package versions independently.
+
+Both `pnpm version` and `pnpm release` run `scripts/check-clean.mjs` and abort
+on a dirty working tree: `pnpm version` forces committing source + the changeset
+before bumping, and `pnpm release` forces committing the version bump before
+publishing so the release's git tag points at the published code.
