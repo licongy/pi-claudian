@@ -17,7 +17,7 @@ Claudian stores per-conversation metadata under `.claudian/sessions/conv-*.meta.
 directions, with conflict resolution that never silently overwrites a name you
 set yourself.
 
-## Install
+## Installation
 
 ```
 pi install npm:@pi-claudian/sync-title

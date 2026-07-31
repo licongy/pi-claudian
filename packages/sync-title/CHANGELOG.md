@@ -1,5 +1,11 @@
 # @pi-claudian/sync-title
 
+## 0.1.5
+
+### Patch Changes
+
+- Improve npm discoverability with higher-signal keywords (pi-coding-agent, pi-claudian, conversation-title, session-name, two-way-sync, title-sync); drop generic terms (sync, title, session, extension). Keep pi-package and pi-extension required by the pi.dev gallery.
+
 ## 0.1.4
 
 ### Patch Changes
