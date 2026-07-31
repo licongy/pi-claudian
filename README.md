@@ -16,9 +16,10 @@ pi install npm:<package-name>
 
 ## Extensions
 
-| Package                                          | Description                                                                          |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
-| [`@pi-claudian/sync-title`](packages/sync-title) | Sync Claudian conversation titles into pi session names so they appear in `/resume`. |
+| Package                                              | Description                                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| [`@pi-claudian/sync-title`](packages/sync-title)     | Sync Claudian conversation titles into pi session names so they appear in `/resume`. |
+| [`@pi-claudian/sync-session`](packages/sync-session) | Sync pi `/tree` and `/fork` session changes into Claudian's conversation metadata.   |
 
 ## Development
 

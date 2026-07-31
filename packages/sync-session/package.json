@@ -1,0 +1,59 @@
+{
+  "name": "@pi-claudian/sync-session",
+  "version": "0.1.0",
+  "description": "Pi extension that syncs Pi /tree and /fork session changes into Claudian's conversation metadata.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Licong Yang",
+    "email": "licong.yang@icloud.com",
+    "url": "https://github.com/licongy"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/licongy/pi-claudian.git",
+    "directory": "packages/sync-session"
+  },
+  "homepage": "https://github.com/licongy/pi-claudian/tree/master/packages/sync-session#readme",
+  "bugs": {
+    "url": "https://github.com/licongy/pi-claudian/issues"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "pi-claudian",
+    "claudian",
+    "session-tree",
+    "fork",
+    "leaf-sync",
+    "session-sync"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "debug.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.82.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.82.1",
+    "@types/node": "^22.10.0"
+  }
+}
