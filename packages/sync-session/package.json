@@ -1,7 +1,7 @@
 {
   "name": "@pi-claudian/sync-session",
   "version": "0.1.1",
-  "description": "Pi extension that syncs Pi /tree and /fork session changes into Claudian's conversation metadata.",
+  "description": "Pi extension that syncs Pi /tree, /clone and /fork session changes into Claudian's conversation metadata.",
   "type": "module",
   "license": "MIT",
   "author": {
@@ -29,7 +29,8 @@
     "pi-claudian",
     "claudian",
     "session-tree",
-    "fork",
+    "session-fork",
+    "session-clone",
     "leaf-sync",
     "session-sync"
   ],
