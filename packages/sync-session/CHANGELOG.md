@@ -1,5 +1,11 @@
 # @pi-claudian/sync-session
 
+## 0.1.2
+
+### Patch Changes
+
+- 9c84fe6: Update description and keywords for clone support.
+
 ## 0.1.1
 
 ### Patch Changes
