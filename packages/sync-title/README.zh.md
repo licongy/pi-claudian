@@ -34,18 +34,22 @@ pi install npm:@pi-claudian/sync-title
 
 本扩展依据一张决策表，将 Pi 会话名称与 Claudian 标题进行协调：
 
-| Pi 名称 | Claudian 标题                       | 操作                                                   |
-| ------- | ----------------------------------- | ------------------------------------------------------ |
-| 空      | 空                                  | 无操作（若 Claudian 仍在生成，则自动重试）             |
-| 空      | 已就绪                              | Claudian → Pi                                          |
-| 已就绪  | 空                                  | Pi → Claudian（Claudian 仍在生成时跳过）               |
-| 已就绪  | 相同                                | 无操作                                                 |
-| 已就绪  | 不同（自动触发）                    | 仅通知，保留 Pi 名称                                   |
-| 已就绪  | 不同（手动 `/name`、`/sync-title`） | 提示：Pi→Claudian / Claudian→Pi / 两者都保留 / 取消    |
+| Pi 名称 | Claudian 标题                       | 操作                                                |
+| ------- | ----------------------------------- | --------------------------------------------------- |
+| 空      | 空                                  | 无操作（若 Claudian 仍在生成，则自动重试）          |
+| 空      | 已就绪                              | Claudian → Pi                                       |
+| 已就绪  | 空                                  | Pi → Claudian（Claudian 仍在生成时跳过）            |
+| 已就绪  | 相同                                | 无操作                                              |
+| 已就绪  | 不同（自动触发）                    | 仅通知，保留 Pi 名称                                |
+| 已就绪  | 不同（手动 `/name`、`/sync-title`） | 提示：Pi→Claudian / Claudian→Pi / 两者都保留 / 取消 |
 
 说明：
 
-- 优先按 Pi 会话 UUID 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径。
+- 优先按 Pi 会话 UUID 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径
+  （经 `fs.realpath` 比较，因此符号链接化的 vault 也能匹配）。
+- **vault 解析**使用会话自身的家目录（`ctx.cwd`，pi 会将其设为所恢复会话记录的 `cwd`，
+  而非 `process.cwd()`），向上查找最近的 `.claudian/sessions`。因此从 vault 的子目录恢复
+  一个 Claudian 会话仍能正确同步。
 - 绝不静默覆盖你自行命名的会话：自动触发（回复之后）在两者不一致时仅通知；交互式触发则
   让你选择同步 Pi→Claudian、Claudian→Pi、两者都保留或取消。
 - 清除：用 `/name` 清空 Pi 名称（设为空）**不会**擦除 Claudian 的标题。

@@ -41,6 +41,7 @@
   "files": [
     "index.ts",
     "debug.ts",
+    "claudian-vault.ts",
     "README.md",
     "README.zh.md"
   ],

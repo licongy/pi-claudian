@@ -37,19 +37,24 @@ retry if Claudian has not generated its title yet, and will prompt on conflict).
 The extension resolves the Pi session name against the Claudian title using a
 single decision table:
 
-| Pi name | Claudian title                            | Action                                                      |
-| ------- | ----------------------------------------- | ----------------------------------------------------------- |
-| empty   | empty                                     | nothing (auto-retry if Claudian is still generating)        |
-| empty   | ready                                     | Claudian → Pi                                               |
-| ready   | empty                                     | Pi → Claudian (skipped while Claudian is still generating)  |
-| ready   | same                                      | no-op                                                       |
-| ready   | different (automatic)                     | notify only, keep Pi name                                   |
-| ready   | different (manual `/name`, `/sync-title`) | prompt: Pi→Claudian / Claudian→Pi / keep both / cancel      |
+| Pi name | Claudian title                            | Action                                                     |
+| ------- | ----------------------------------------- | ---------------------------------------------------------- |
+| empty   | empty                                     | nothing (auto-retry if Claudian is still generating)       |
+| empty   | ready                                     | Claudian → Pi                                              |
+| ready   | empty                                     | Pi → Claudian (skipped while Claudian is still generating) |
+| ready   | same                                      | no-op                                                      |
+| ready   | different (automatic)                     | notify only, keep Pi name                                  |
+| ready   | different (manual `/name`, `/sync-title`) | prompt: Pi→Claudian / Claudian→Pi / keep both / cancel     |
 
 Notes:
 
 - Matches the Claudian meta file by Pi session UUID first, falling back to the
-  `providerState.sessionFile` path.
+  `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
+  vaults match).
+- **Vault resolution** uses the session's own home directory (`ctx.cwd`, which
+  pi sets to the resumed session's recorded `cwd` — not `process.cwd()`),
+  walking upward to the nearest `.claudian/sessions`. So resuming a Claudian
+  session from a sub-directory of the vault still syncs correctly.
 - Never silently overwrites a session you named yourself: automatic triggers
   (after a reply) only notify on a mismatch; interactive triggers let you choose
   to sync Pi→Claudian, Claudian→Pi, keep both unchanged, or cancel.

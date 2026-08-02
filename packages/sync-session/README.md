@@ -54,7 +54,12 @@ that was already in sync). No operation is silent:
 ## Behavior
 
 - Matches the Claudian meta file by Pi session id first, falling back to the
-  `providerState.sessionFile` path.
+  `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
+  vaults match).
+- **Vault resolution** uses the session's own home directory (`ctx.cwd`, which
+  pi sets to the resumed session's recorded `cwd` — not `process.cwd()`),
+  walking upward to the nearest `.claudian/sessions`. So resuming a Claudian
+  session from a sub-directory of the vault still syncs correctly.
 - Fork conversations inherit the source title so they are identifiable
   immediately; `@pi-claudian/sync-title` reconciles the Pi name on the next turn.
 - Fork creation is idempotent: if a Claudian conversation already exists for the

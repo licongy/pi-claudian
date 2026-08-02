@@ -43,6 +43,13 @@
  * Writes are atomic (tmp + rename) so Claudian never reads a half-written file.
  * Silent no-op outside of a Claudian-managed vault.
  *
+ * Vault resolution: pi sets the extension's `ctx.cwd` to the session's recorded
+ * home directory (the jsonl header's `cwd`), NOT to `process.cwd()`. So when a
+ * Claudian session is resumed from a sub-directory, `ctx.cwd` is the vault root
+ * and the sessions dir is derived from `ctx.cwd`, walking upward to the nearest
+ * `.claudian/sessions`. Path matching goes through `fs.realpath` so symlinked
+ * vaults compare equal. See claudian-vault.ts.
+ *
  * Installation:
  *   pi install npm:@pi-claudian/sync-session
  *
@@ -61,6 +68,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
+import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 
 interface ClaudianProviderState {
   leafEntryId?: string | null;
@@ -90,26 +98,20 @@ interface MetaFile {
 const CLAUDIAN_PROVIDER_PI = "pi";
 
 export default function (pi: ExtensionAPI) {
-  function claudianSessionsDir(): string {
-    // Claudian starts pi with the vault root as cwd
-    return path.join(process.cwd(), ".claudian", "sessions");
-  }
-
-  /** Read every conv-*.meta.json in the Claudian sessions dir (skipping corrupt/mid-write files). */
-  async function readAllMetas(): Promise<MetaFile[]> {
-    const dir = claudianSessionsDir();
+  /** Read every conv-*.meta.json in a Claudian sessions dir (skipping corrupt/mid-write files). */
+  async function readAllMetas(sessionsDir: string): Promise<MetaFile[]> {
     let files: string[] = [];
     try {
-      files = await fs.readdir(dir);
+      files = await fs.readdir(sessionsDir);
     } catch {
-      debug("sessions dir missing — not a Claudian environment");
-      return []; // .claudian/sessions missing (not a Claudian environment)
+      debug("sessions dir unreadable:", sessionsDir);
+      return [];
     }
 
     const out: MetaFile[] = [];
     for (const f of files) {
       if (!f.endsWith(".meta.json")) continue;
-      const fullPath = path.join(dir, f);
+      const fullPath = path.join(sessionsDir, f);
       try {
         const meta = JSON.parse(await fs.readFile(fullPath, "utf-8")) as ClaudianMeta;
         out.push({ meta, file: fullPath });
@@ -121,8 +123,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   /** Find the Claudian conversation backing a pi session, by sessionId then sessionFile path. */
-  async function findMeta(sessionId: string, sessionFile: string | null): Promise<MetaFile | null> {
-    const metas = await readAllMetas();
+  async function findMeta(
+    sessionsDir: string,
+    sessionId: string,
+    sessionFile: string | null,
+  ): Promise<MetaFile | null> {
+    const metas = await readAllMetas(sessionsDir);
     let fileFallback: MetaFile | null = null;
     for (const m of metas) {
       const ms = m.meta.sessionId;
@@ -134,7 +140,7 @@ export default function (pi: ExtensionAPI) {
       if (
         sessionFile &&
         m.meta.providerState?.sessionFile &&
-        samePath(m.meta.providerState.sessionFile, sessionFile)
+        (await samePath(m.meta.providerState.sessionFile, sessionFile))
       ) {
         debug("matched by sessionFile fallback:", m.file);
         fileFallback = m;
@@ -144,11 +150,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   /** Find a Claudian conversation by the pi session file path (used to locate the fork source). */
-  async function findMetaBySessionFile(sessionFile: string): Promise<MetaFile | null> {
-    const metas = await readAllMetas();
+  async function findMetaBySessionFile(
+    sessionsDir: string,
+    sessionFile: string,
+  ): Promise<MetaFile | null> {
+    const metas = await readAllMetas(sessionsDir);
     for (const m of metas) {
       const f = m.meta.providerState?.sessionFile;
-      if (f && samePath(f, sessionFile)) {
+      if (f && (await samePath(f, sessionFile))) {
         debug("matched fork source by sessionFile:", m.file);
         return m;
       }
@@ -157,8 +166,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   /** Find a Claudian conversation by pi sessionId (used for fork idempotency). */
-  async function findMetaBySessionId(sessionId: string): Promise<MetaFile | null> {
-    const metas = await readAllMetas();
+  async function findMetaBySessionId(
+    sessionsDir: string,
+    sessionId: string,
+  ): Promise<MetaFile | null> {
+    const metas = await readAllMetas(sessionsDir);
     for (const m of metas) {
       const ms = m.meta.sessionId;
       const ps = m.meta.providerState?.sessionId;
@@ -248,7 +260,13 @@ export default function (pi: ExtensionAPI) {
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
     const leafId = ctx.sessionManager.getLeafId();
 
-    const found = await findMeta(sessionId, sessionFile);
+    const sessionsDir = await resolveClaudianSessionsDir(ctx);
+    if (!sessionsDir) {
+      debug("no claudian sessions dir enclosing cwd — not a Claudian environment");
+      return outcome("not a Claudian environment — nothing to sync", "warning");
+    }
+
+    const found = await findMeta(sessionsDir, sessionId, sessionFile);
     if (!found) {
       debug("no matching Claudian meta — not a Claudian session");
       return outcome("not a Claudian session — nothing to sync", "warning");
@@ -306,16 +324,22 @@ export default function (pi: ExtensionAPI) {
     }
     const newName = ctx.sessionManager.getSessionName();
 
+    const sessionsDir = await resolveClaudianSessionsDir(ctx);
+    if (!sessionsDir) {
+      debug("no claudian sessions dir enclosing cwd — fork not synced");
+      return outcome("not a Claudian environment — nothing to sync", "warning");
+    }
+
     // Idempotency: a Claudian conversation may already exist for the new
     // session (e.g. Claudian's own fork conversion, or a re-fired event).
-    const existing = await findMetaBySessionId(newSessionId);
+    const existing = await findMetaBySessionId(sessionsDir, newSessionId);
     if (existing) {
       debug("claudian conversation already exists for forked session:", existing.file);
       // Still reconcile the leaf so Claudian opens at the right position.
       return await syncLeaf(ctx);
     }
 
-    const source = await findMetaBySessionFile(previousSessionFile);
+    const source = await findMetaBySessionFile(sessionsDir, previousSessionFile);
     if (!source) {
       debug("source session is not a Claudian conversation — not creating a fork meta");
       return outcome("source is not a Claudian conversation — nothing to sync", "warning");
@@ -344,7 +368,7 @@ export default function (pi: ExtensionAPI) {
       // immediately); sync-title will reconcile the pi name on the next turn.
     };
 
-    const file = path.join(claudianSessionsDir(), `${convId}.meta.json`);
+    const file = path.join(sessionsDir, `${convId}.meta.json`);
     await writeMeta(file, forked);
     debug("created fork conversation:", convId, "from", src.id);
     const sourceLabel = src.title ? `"${src.title}"` : (src.id ?? previousSessionFile);
@@ -428,13 +452,4 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
-}
-
-/** Compare two filesystem paths robustly (case-insensitive on darwin/win). */
-function samePath(a: string, b: string): boolean {
-  const norm = (p: string) => path.resolve(p);
-  if (process.platform === "win32" || process.platform === "darwin") {
-    return norm(a).toLowerCase() === norm(b).toLowerCase();
-  }
-  return norm(a) === norm(b);
 }

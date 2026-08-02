@@ -32,7 +32,11 @@
  *   agent_end (automatic)    ready     different        notify only (never auto-overwrite)
  *   /name or /sync-title     ready     different        prompt: Pi->C / C->Pi / keep / cancel
  *
- * Matching: first exact-match by sessionId, then fall back to the sessionFile path.
+ * Matching: first exact-match by sessionId, then fall back to the sessionFile
+ * path (compared through fs.realpath so symlinked vaults match). The Claudian
+ * sessions dir is resolved from the extension's `ctx.cwd` (the session's
+ * recorded home directory, not process.cwd()), walking upward to the nearest
+ * `.claudian/sessions` — see claudian-vault.ts.
  * Reentrancy: pi.setSessionName() re-emits session_info_changed synchronously
  * (agent-session.js), so writes performed by this extension are guarded by a
  * self-write flag to avoid re-entering the decision table.
@@ -56,6 +60,7 @@ import type {
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
+import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 
 const RETRY_DELAY_MS = 10_000;
 
@@ -77,30 +82,25 @@ export default function (pi: ExtensionAPI) {
   // the resulting session_info_changed event is consumed instead of reprocessed.
   let selfWritingName = false;
 
-  function claudianSessionsDir(): string {
-    // Claudian starts Pi with the vault root as cwd
-    return path.join(process.cwd(), ".claudian", "sessions");
-  }
-
   async function findMetaForSession(
+    sessionsDir: string,
     sessionId: string,
     sessionFile: string | null,
   ): Promise<{ meta: ClaudianMeta; file: string } | null> {
-    const dir = claudianSessionsDir();
-    debug("scanning", dir, "for session", sessionId);
+    debug("scanning", sessionsDir, "for session", sessionId);
     let files: string[] = [];
     try {
-      files = await fs.readdir(dir);
+      files = await fs.readdir(sessionsDir);
     } catch {
-      debug("sessions dir missing — not a Claudian environment");
-      return null; // .claudian/sessions missing (not a Claudian environment)
+      debug("sessions dir unreadable:", sessionsDir);
+      return null;
     }
 
     let fileFallback: { meta: ClaudianMeta; file: string } | null = null;
 
     for (const f of files) {
       if (!f.endsWith(".meta.json")) continue;
-      const fullPath = path.join(dir, f);
+      const fullPath = path.join(sessionsDir, f);
       let meta: ClaudianMeta;
       try {
         meta = JSON.parse(await fs.readFile(fullPath, "utf-8"));
@@ -114,11 +114,11 @@ export default function (pi: ExtensionAPI) {
         return { meta, file: fullPath };
       }
 
-      // Fallback match: exact sessionFile path (guards against a missing/stale meta.sessionId)
+      // Fallback match: sessionFile path (realpath-aware; guards against a missing/stale meta.sessionId)
       if (
         sessionFile &&
         meta.providerState?.sessionFile &&
-        meta.providerState.sessionFile === sessionFile
+        (await samePath(meta.providerState.sessionFile, sessionFile))
       ) {
         debug("matched by sessionFile fallback:", fullPath);
         fileFallback = { meta, file: fullPath };
@@ -171,7 +171,13 @@ export default function (pi: ExtensionAPI) {
 
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
 
-    const found = await findMetaForSession(sessionId, sessionFile);
+    const sessionsDir = await resolveClaudianSessionsDir(ctx);
+    if (!sessionsDir) {
+      debug("no claudian sessions dir enclosing cwd — not a Claudian environment");
+      return true; // not a Claudian-originated session (e.g. a plain TUI session)
+    }
+
+    const found = await findMetaForSession(sessionsDir, sessionId, sessionFile);
     if (!found) {
       debug("no matching Claudian meta — not a Claudian session");
       return true; // not a Claudian-originated session (e.g. a plain TUI session)

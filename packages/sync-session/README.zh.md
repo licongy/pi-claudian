@@ -49,7 +49,11 @@ pi install npm:@pi-claudian/sync-session
 
 ## 行为
 
-- 优先按 Pi 会话 id 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径。
+- 优先按 Pi 会话 id 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径
+  （经 `fs.realpath` 比较，因此符号链接化的 vault 也能匹配）。
+- **vault 解析**使用会话自身的家目录（`ctx.cwd`，pi 会将其设为所恢复会话记录的 `cwd`，
+  而非 `process.cwd()`），向上查找最近的 `.claudian/sessions`。因此从 vault 的子目录恢复
+  一个 Claudian 会话仍能正确同步。
 - Fork 会话会继承源会话的标题，以便立即识别；`@pi-claudian/sync-title` 会在下一轮
   协调 Pi 的名称。
 - Fork 创建是幂等的：如果 Claudian 中已存在该 fork 会话对应的会话（例如 Claudian 自身的
