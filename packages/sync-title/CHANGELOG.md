@@ -1,5 +1,11 @@
 # @pi-claudian/sync-title
 
+## 0.1.6
+
+### Patch Changes
+
+- f35b29a: Add Simplified Chinese README (`README.zh.md`) with language-switch links between the English and Chinese READMEs, and include `README.zh.md` in the published `files` so it ships to npm.
+
 ## 0.1.5
 
 ### Patch Changes
