@@ -4,7 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-A monorepo of independently-published [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extensions for collaborating with Claudian.
+[English](README.md) | [中文](README.zh.md)
+
+A monorepo of independently-published [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extensions for collaborating with [Claudian](https://github.com/claudian).
 
 Each extension lives in its own package under `packages/*` and is published to
 npm as TypeScript source (pi loads it via jiti, no build step), so you can
