@@ -3,6 +3,8 @@
 [![npm version](https://img.shields.io/npm/v/@pi-claudian/sync-session?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/@pi-claudian/sync-session)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+[English](README.md) | [中文](README.zh.md)
+
 A [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extension
 that bridges [Claudian](https://github.com/claudian) and Pi: it syncs Pi
 session-tree changes (`/tree`, `/fork`, `/clone`) into Claudian's conversation
