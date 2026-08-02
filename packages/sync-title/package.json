@@ -1,6 +1,6 @@
 {
   "name": "@pi-claudian/sync-title",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Pi extension that syncs Claudian conversation titles and pi session names.",
   "type": "module",
   "license": "MIT",
