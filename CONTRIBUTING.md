@@ -1,5 +1,7 @@
 # Contributing to pi-claudian
 
+[English](CONTRIBUTING.md) | [中文](CONTRIBUTING.zh.md)
+
 Thanks for your interest in improving pi-claudian! Contributions — bug reports,
 feature ideas, new extensions, docs, or fixes — are all welcome.
 
