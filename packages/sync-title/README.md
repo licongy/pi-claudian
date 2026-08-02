@@ -3,6 +3,8 @@
 [![npm version](https://img.shields.io/npm/v/@pi-claudian/sync-title?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/@pi-claudian/sync-title)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+[English](README.md) | [中文](README.zh.md)
+
 A [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extension
 that bridges [Claudian](https://github.com/claudian) and Pi: it does a two-way
 sync of the Claudian conversation title with the Pi session name, so the two
@@ -35,14 +37,14 @@ retry if Claudian has not generated its title yet, and will prompt on conflict).
 The extension resolves the Pi session name against the Claudian title using a
 single decision table:
 
-| Pi name | Claudian title                            | Action                                                     |
-| ------- | ----------------------------------------- | ---------------------------------------------------------- |
-| empty   | empty                                     | nothing (auto-retry if Claudian is still generating)       |
-| empty   | ready                                     | Claudian → Pi                                              |
-| ready   | empty                                     | Pi → Claudian (skipped while Claudian is still generating) |
-| ready   | same                                      | no-op                                                      |
-| ready   | different (automatic)                     | notify only, keep Pi name                                  |
-| ready   | different (manual `/name`, `/sync-title`) | prompt: Pi→Claudian / Claudian→Pi / keep both / cancel     |
+| Pi name | Claudian title                            | Action                                                      |
+| ------- | ----------------------------------------- | ----------------------------------------------------------- |
+| empty   | empty                                     | nothing (auto-retry if Claudian is still generating)        |
+| empty   | ready                                     | Claudian → Pi                                               |
+| ready   | empty                                     | Pi → Claudian (skipped while Claudian is still generating)  |
+| ready   | same                                      | no-op                                                       |
+| ready   | different (automatic)                     | notify only, keep Pi name                                   |
+| ready   | different (manual `/name`, `/sync-title`) | prompt: Pi→Claudian / Claudian→Pi / keep both / cancel      |
 
 Notes:
 

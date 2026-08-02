@@ -41,7 +41,8 @@
   "files": [
     "index.ts",
     "debug.ts",
-    "README.md"
+    "README.md",
+    "README.zh.md"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
