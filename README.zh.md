@@ -21,7 +21,7 @@ pi install npm:<package-name>
 | 包                                                   | 描述                                                                    |
 | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | [`@pi-claudian/sync-title`](packages/sync-title)     | 将 Claudian 的会话标题同步到 pi 的会话名称中，使其出现在 `/resume` 里。 |
-| [`@pi-claudian/sync-session`](packages/sync-session) | 将 pi 的 `/tree` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。    |
+| [`@pi-claudian/sync-session`](packages/sync-session) | 将 pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。    |
 
 ## 开发
 
