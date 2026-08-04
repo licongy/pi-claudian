@@ -26,6 +26,22 @@ never watches Pi for changes, so two Pi operations leave that metadata stale:
 
 This extension closes that gap in the Pi → Claudian direction.
 
+### Protecting conversations from Claudian's missing-session cleanup
+
+Claudian's `resolveMissingConversationSession` detaches a Pi session it deems
+"missing": when it does, and neither a top-level nor `providerState` `sessionId`
+is present, it also drops `leafEntryId` — which makes the conversation
+**unresumable** (it vanishes from Claudian's list). This has caused real data
+loss when Claudian false-alarms on session availability (e.g. after a version
+upgrade).
+
+This extension is the safety net: every sync — automatic or manual — also
+writes the Pi session id into the conversation's **top-level `sessionId`**
+(not only `providerState`). With the id present in both places, the cleanup
+keeps `leafEntryId` and the conversation stays resumable. The backfill runs
+**automatically on every session resume**, so existing conversations heal
+themselves the first time you reopen them in Claudian.
+
 ## Installation
 
 ```
@@ -42,6 +58,9 @@ Automatic:
   forked session, copying the source title/model and pointing at the new
   `sessionFile` / `sessionId` / `leafEntryId`. The fork then shows up in
   Claudian's conversation list.
+- On **session resume** (Claudian opening an existing conversation), the
+  conversation's top-level `sessionId` is auto-backfilled if missing — silently,
+  unless a patch was actually applied.
 
 Manual: run **`/sync-session`** to re-sync the current leaf on demand.
 
@@ -56,6 +75,13 @@ that was already in sync). No operation is silent:
 - Matches the Claudian meta file by Pi session id first, falling back to the
   `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
   vaults match).
+- In addition to `providerState`, every sync also (re)writes the conversation's
+  top-level `sessionId` to the Pi session id. Claudian's
+  `resolveMissingConversationSession` detaches a session it deems missing: when
+  neither a top-level nor `providerState` `sessionId` is present, it also drops
+  `leafEntryId`, which makes the conversation unresumable. Keeping the Pi
+  session id in both places is the safety net that preserves `leafEntryId`
+  through such a false alarm. This mirrors what fork creation already writes.
 - **Vault resolution** uses the session's own home directory (`ctx.cwd`, which
   Pi sets to the resumed session's recorded `cwd` — not `process.cwd()`),
   walking upward to the nearest `.claudian/sessions`. So resuming a Claudian

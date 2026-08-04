@@ -29,6 +29,13 @@
  * - On `session_start` with reason "fork": creates a new conv-*.meta.json for
  *   the forked session, copying the title/model from the source conversation
  *   and pointing at the new sessionFile/sessionId/leafEntryId.
+ * - On `session_start` with reason "resume": auto-backfills the conversation's
+ *   top-level `sessionId` (and providerState) if missing. Claudian's
+ *   `resolveMissingConversationSession` strips `leafEntryId` when neither a
+ *   top-level nor providerState `sessionId` is present, making the conversation
+ *   unresumable. Writing the Pi session id in both places is the safety net
+ *   that preserves the binding through such a false alarm. Silent unless a
+ *   meta was actually patched.
  * - `/sync-session`: re-syncs the current leaf on demand.
  *
  * Claudian -> Pi fork conversion is not handled here — there is no need:
@@ -217,6 +224,8 @@ export default function (pi: ExtensionAPI) {
   interface SyncOutcome {
     message: string;
     type: "info" | "warning" | "error";
+    /** True when a meta file was actually written/patched (vs a no-op/skip). */
+    written: boolean;
   }
   /** One entry in a synced-sessions summary list. */
   interface SyncItem {
@@ -242,8 +251,12 @@ export default function (pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
-  function outcome(message: string, type: SyncOutcome["type"] = "info"): SyncOutcome {
-    return { message: `[Session Sync] ${message}`, type };
+  function outcome(
+    message: string,
+    type: SyncOutcome["type"] = "info",
+    written = false,
+  ): SyncOutcome {
+    return { message: `[Session Sync] ${message}`, type, written };
   }
 
   /**
@@ -280,7 +293,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     const currentLeaf = meta.providerState?.leafEntryId ?? null;
-    if (leafId === currentLeaf) {
+    const currentTopSessionId = meta.sessionId ?? null;
+    const topSessionIdStale = currentTopSessionId !== sessionId;
+
+    if (leafId === currentLeaf && !topSessionIdStale) {
       debug("leaf already in sync:", leafId);
       return outcome(
         summarizeSynced(
@@ -296,12 +312,30 @@ export default function (pi: ExtensionAPI) {
       sessionFile: sessionFile ?? meta.providerState?.sessionFile,
       sessionId: meta.providerState?.sessionId ?? sessionId,
     };
-    await patchMeta(file, meta, { providerState });
-    debug("synced leaf:", currentLeaf, "->", leafId);
+    const patch: Partial<ClaudianMeta> = { providerState };
+    if (topSessionIdStale) patch.sessionId = sessionId;
+    await patchMeta(file, meta, patch);
+    debug(
+      "synced leaf:",
+      currentLeaf,
+      "->",
+      leafId,
+      "top sessionId:",
+      currentTopSessionId,
+      "->",
+      sessionId,
+    );
+    const details: string[] = [];
+    if (leafId !== currentLeaf) {
+      details.push(`leaf ${currentLeaf ?? "null"} → ${leafId ?? "null"}`);
+    }
+    if (topSessionIdStale) {
+      details.push(`sessionId ${currentTopSessionId ?? "null"} → ${sessionId}`);
+    }
     return outcome(
-      summarizeSynced([
-        { id: sessionId, name, detail: `leaf ${currentLeaf ?? "null"} → ${leafId ?? "null"}` },
-      ]),
+      summarizeSynced([{ id: sessionId, name, detail: details.join(", ") }]),
+      "info",
+      true,
     );
   }
 
@@ -380,6 +414,8 @@ export default function (pi: ExtensionAPI) {
           detail: `created conversation ${convId} (forked from ${sourceLabel})`,
         },
       ]),
+      "info",
+      true,
     );
   }
 
@@ -427,14 +463,31 @@ export default function (pi: ExtensionAPI) {
   });
 
   // 2. /fork & /clone: create a Claudian conversation for the forked session.
+  //    /resume (Claudian opens an existing conversation): auto-backfill the
+  //    top-level sessionId so Claudian's missing-session cleanup cannot strip
+  //    leafEntryId. Silent unless something was actually written.
   pi.on("session_start", async (event: SessionStartEvent, ctx: ExtensionContext) => {
-    if (event.reason !== "fork") return;
-    debug("session_start (fork) — previousSessionFile:", event.previousSessionFile);
-    try {
-      presentOutcome(ctx, await syncFork(event, ctx), true);
-    } catch (e) {
-      debug("fork sync error:", String(e));
-      presentOutcome(ctx, outcome(`fork sync failed: ${String(e)}`, "error"), true);
+    if (event.reason === "fork") {
+      debug("session_start (fork) — previousSessionFile:", event.previousSessionFile);
+      try {
+        presentOutcome(ctx, await syncFork(event, ctx), true);
+      } catch (e) {
+        debug("fork sync error:", String(e));
+        presentOutcome(ctx, outcome(`fork sync failed: ${String(e)}`, "error"), true);
+      }
+      return;
+    }
+    if (event.reason === "resume") {
+      debug("session_start (resume) — auto-backfill check");
+      try {
+        const o = await syncLeaf(ctx);
+        // Only surface when a meta was actually patched (e.g. sessionId was
+        // missing and got backfilled). A clean resume stays silent.
+        if (o.written) presentOutcome(ctx, o, true);
+      } catch (e) {
+        debug("resume sync error:", String(e));
+        presentOutcome(ctx, outcome(`resume sync failed: ${String(e)}`, "error"), true);
+      }
     }
   });
 

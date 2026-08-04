@@ -24,6 +24,18 @@ Pi 提供方的会话，它会在 `providerState.leafEntryId` 中记录 Pi 会�
 
 本扩展补上了 Pi → Claudian 这一方向的缺口。
 
+### 保护会话免遭 Claudian 的"缺失会话"清理
+
+Claudian 的 `resolveMissingConversationSession` 会剥离它判定为"缺失"的 Pi 会话：当它
+执行剥离时，若顶层和 `providerState` 都没有 `sessionId`，它还会一并丢弃
+`leafEntryId` —— 这会导致会话**无法恢复**（从 Claudian 列表中消失）。当 Claudian 对
+会话可用性误报时（例如版本升级后），这已造成过真实的数据丢失。
+
+本扩展正是安全网：每次同步（自动或手动）都会把 Pi 会话 id 写入会话的**顶层
+`sessionId`**（而非仅写入 `providerState`）。当两处都有该 id 时，清理逻辑会保留
+`leafEntryId`，会话保持可恢复。该回填在**每次会话恢复时自动执行**，因此已有会话会在
+你于 Claudian 中重新打开它的第一时间自我修复。
+
 ## 安装
 
 ```
@@ -39,6 +51,8 @@ pi install npm:@pi-claudian/sync-session
 - **`/fork`** / **`/clone`** 之后，会为 fork 出的会话创建一个新的 `conv-*.meta.json`，
   复制源会话的标题/模型，并指向新的 `sessionFile` / `sessionId` / `leafEntryId`。该
   fork 随即会出现在 Claudian 的会话列表中。
+- **会话恢复**时（Claudian 打开一个已有会话），若该会话缺失顶层 `sessionId` 则自动
+  回填 —— 静默执行，除非确实写入了补丁。
 
 手动：运行 **`/sync-session`** 按需重新同步当前叶子。
 
@@ -51,6 +65,11 @@ pi install npm:@pi-claudian/sync-session
 
 - 优先按 Pi 会话 id 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径
   （经 `fs.realpath` 比较，因此符号链接化的 vault 也能匹配）。
+- 除 `providerState` 外，每次同步还会把会话顶层的 `sessionId`（重新）写为 Pi 会话 id。
+  Claudian 的 `resolveMissingConversationSession` 会剥离它判定为"缺失"的会话：当顶层和
+  `providerState` 都没有 `sessionId` 时，它还会一并丢弃 `leafEntryId`，导致会话无法恢复。
+  在这两处都保留 Pi 会话 id，正是让 `leafEntryId` 在此类误报中得以保留的安全网。这与 fork
+  创建时已有的写入行为一致。
 - **vault 解析**使用会话自身的家目录（`ctx.cwd`，Pi 会将其设为所恢复会话记录的 `cwd`，
   而非 `process.cwd()`），向上查找最近的 `.claudian/sessions`。因此从 vault 的子目录恢复
   一个 Claudian 会话仍能正确同步。
