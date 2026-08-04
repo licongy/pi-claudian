@@ -26,7 +26,7 @@ pnpm format      # prettier --write .（修复格式）
 ## 项目结构
 
 - `packages/*` 下每个目录对应一个可发布的扩展。
-- 每个包将 `index.ts` **源码**发布到 npm；pi 通过
+- 每个包将 `index.ts` **源码**发布到 npm；Pi 通过
   [jiti](https://github.com/unjs/jiti) 加载，因此没有构建或 `dist/` 步骤。
 - 共享的 TypeScript 配置位于 `tsconfig.base.json`（`noEmit`）；每个包都继承它。`tsc`
   仅用于类型检查。
@@ -65,7 +65,7 @@ pnpm format      # prettier --write .（修复格式）
 
 ## 调试
 
-用一个环境变量即可为所有 `@pi-claudian` 扩展开启调试日志（输出走 stderr，绝不与 pi 的
+用一个环境变量即可为所有 `@pi-claudian` 扩展开启调试日志（输出走 stderr，绝不与 Pi 的
 stdout 混在一起）：
 
 ```sh

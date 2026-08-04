@@ -26,7 +26,7 @@
 
 ### Patch Changes
 
-- 2841d6d: Show operation results in the pi TUI as a multi-line summary instead of terse
+- 2841d6d: Show operation results in the Pi TUI as a multi-line summary instead of terse
   one-line status text, and make them actually visible after `/tree` and `/fork`.
 
   Every `/tree`, `/fork`/`/clone`, and manual `/sync-session` now reports the
@@ -39,7 +39,7 @@
   ```
 
   Automatic triggers (`/tree`, `/fork`/`/clone`) show the summary in an
-  auto-clearing widget, because pi replaces the last chat status line (and re-renders
+  auto-clearing widget, because Pi replaces the last chat status line (and re-renders
   the chat on `/tree`) right after these events — a plain `notify` was overwritten
   before it could be read. Manual `/sync-session` has no such follow-up and uses a
   persistent status line. No-op / not-a-Claudian-session / error cases also surface
@@ -49,7 +49,7 @@
 
 ### Minor Changes
 
-- Add `@pi-claudian/sync-session`, a pi extension that syncs pi session-tree
+- Add `@pi-claudian/sync-session`, a Pi extension that syncs Pi session-tree
   changes into Claudian's conversation metadata (`.claudian/sessions`).
 
   - `/tree` (and tree keybindings): writes the new active leaf into the matching
@@ -63,5 +63,5 @@
     silent no-op outside Claudian-managed vaults.
   - Adds a `/sync-session` command for on-demand leaf re-sync.
 
-  Claudian → pi fork conversion is intentionally not handled here (Claudian owns
+  Claudian → Pi fork conversion is intentionally not handled here (Claudian owns
   the pi-session lifecycle for its own conversations).

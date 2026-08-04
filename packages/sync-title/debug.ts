@@ -8,7 +8,7 @@
  *   PI_CLAUDIAN_DEBUG=1 pi            # show inline
  *   PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
  *
- * This is a source-only module (pi loads it via jiti). Each @pi-claudian
+ * This is a source-only module (Pi loads it via jiti). Each @pi-claudian
  * package vendors its own copy and imports it, keeping packages independent —
  * the shared contract is the PI_CLAUDIAN_DEBUG env var name, not a shared
  * npm dependency.

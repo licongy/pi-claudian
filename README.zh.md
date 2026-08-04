@@ -6,10 +6,10 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-一个由独立发布的 [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 扩展组成的
+一个由独立发布的 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 扩展组成的
 monorepo，用于与 [Claudian](https://github.com/claudian) 协作。
 
-每个扩展都位于 `packages/*` 下各自的包中，并以 TypeScript 源码形式发布到 npm（pi 通过 jiti
+每个扩展都位于 `packages/*` 下各自的包中，并以 TypeScript 源码形式发布到 npm（Pi 通过 jiti
 加载，无需构建步骤），因此你只需安装所需的部分：
 
 ```
@@ -20,8 +20,8 @@ pi install npm:<package-name>
 
 | 包                                                   | 描述                                                                    |
 | ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| [`@pi-claudian/sync-title`](packages/sync-title)     | 将 Claudian 的会话标题同步到 pi 的会话名称中，使其出现在 `/resume` 里。 |
-| [`@pi-claudian/sync-session`](packages/sync-session) | 将 pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。    |
+| [`@pi-claudian/sync-title`](packages/sync-title)     | 将 Claudian 的会话标题同步到 Pi 的会话名称中，使其出现在 `/resume` 里。 |
+| [`@pi-claudian/sync-session`](packages/sync-session) | 将 Pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。    |
 
 ## 开发
 
@@ -37,7 +37,7 @@ pnpm format       # 用 prettier 修复格式
 ## 调试
 
 所有 `@pi-claudian` 扩展共享一个调试开关。设置一个环境变量即可在 stderr 上追踪每个扩展
-（绝不会与 pi 的 stdout 混在一起）：
+（绝不会与 Pi 的 stdout 混在一起）：
 
 ```sh
 PI_CLAUDIAN_DEBUG=1 pi              # 内联显示调试输出

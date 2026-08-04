@@ -1,19 +1,19 @@
 /**
  * @pi-claudian/sync-session
  *
- * Sync pi session-tree changes (/tree, /fork, /clone) into Claudian's
+ * Sync Pi session-tree changes (/tree, /fork, /clone) into Claudian's
  * conversation metadata.
  *
  * Claudian tracks each pi-provider conversation in
  * `.claudian/sessions/conv-<id>.meta.json`, including the active position in
- * pi's session tree:
+ * Pi's session tree:
  *
- *   meta.sessionId                  = pi session UUID
- *   meta.providerState.sessionFile  = absolute path to the pi session jsonl
- *   meta.providerState.sessionId    = pi session UUID
- *   meta.providerState.leafEntryId  = the pi entry the conversation is at
+ *   meta.sessionId                  = Pi session UUID
+ *   meta.providerState.sessionFile  = absolute path to the Pi session jsonl
+ *   meta.providerState.sessionId    = Pi session UUID
+ *   meta.providerState.leafEntryId  = the Pi entry the conversation is at
  *
- * Claudian never watches pi for changes, so two pi operations leave its
+ * Claudian never watches Pi for changes, so two Pi operations leave its
  * metadata stale:
  *
  * - /tree (navigateTree): stays in the SAME session file but moves the active
@@ -22,7 +22,7 @@
  * - /fork & /clone (fork): creates a NEW session file + UUID. Claudian has no
  *   conversation for the new session, so it never appears in Claudian's list.
  *
- * This extension closes that gap (pi -> Claudian only):
+ * This extension closes that gap (Pi -> Claudian only):
  *
  * - On `session_tree`: writes the new leaf id into the matching meta's
  *   `providerState.leafEntryId`.
@@ -31,19 +31,19 @@
  *   and pointing at the new sessionFile/sessionId/leafEntryId.
  * - `/sync-session`: re-syncs the current leaf on demand.
  *
- * Claudian -> pi fork conversion is not handled here — there is no need:
- * Claudian already creates the pi session file (and its conv meta) when it
- * forks a pi-based conversation, so the pi side is already up to date. Claudian
- * owns the pi-session lifecycle for its own conversations and performs that
- * conversion in its own process, where a session-scoped pi extension cannot
+ * Claudian -> Pi fork conversion is not handled here — there is no need:
+ * Claudian already creates the Pi session file (and its conv meta) when it
+ * forks a Pi-based conversation, so the Pi side is already up to date. Claudian
+ * owns the Pi session lifecycle for its own conversations and performs that
+ * conversion in its own process, where a session-scoped Pi extension cannot
  * reliably observe it. This extension therefore only does the opposite
- * direction (pi -> Claudian), which Claudian does not do itself.
+ * direction (Pi -> Claudian), which Claudian does not do itself.
  *
- * Matching: by pi sessionId first, falling back to the sessionFile path.
+ * Matching: by Pi sessionId first, falling back to the sessionFile path.
  * Writes are atomic (tmp + rename) so Claudian never reads a half-written file.
  * Silent no-op outside of a Claudian-managed vault.
  *
- * Vault resolution: pi sets the extension's `ctx.cwd` to the session's recorded
+ * Vault resolution: Pi sets the extension's `ctx.cwd` to the session's recorded
  * home directory (the jsonl header's `cwd`), NOT to `process.cwd()`. So when a
  * Claudian session is resumed from a sub-directory, `ctx.cwd` is the vault root
  * and the sessions dir is derived from `ctx.cwd`, walking upward to the nearest
@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
     return out;
   }
 
-  /** Find the Claudian conversation backing a pi session, by sessionId then sessionFile path. */
+  /** Find the Claudian conversation backing a Pi session, by sessionId then sessionFile path. */
   async function findMeta(
     sessionsDir: string,
     sessionId: string,
@@ -149,7 +149,7 @@ export default function (pi: ExtensionAPI) {
     return fileFallback;
   }
 
-  /** Find a Claudian conversation by the pi session file path (used to locate the fork source). */
+  /** Find a Claudian conversation by the Pi session file path (used to locate the fork source). */
   async function findMetaBySessionFile(
     sessionsDir: string,
     sessionFile: string,
@@ -165,7 +165,7 @@ export default function (pi: ExtensionAPI) {
     return null;
   }
 
-  /** Find a Claudian conversation by pi sessionId (used for fork idempotency). */
+  /** Find a Claudian conversation by Pi sessionId (used for fork idempotency). */
   async function findMetaBySessionId(
     sessionsDir: string,
     sessionId: string,
@@ -247,7 +247,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Sync the current pi leaf into the Claudian conversation that backs this
+   * Sync the current Pi leaf into the Claudian conversation that backs this
    * session. Used by `session_tree` and the manual `/sync-session` command.
    */
   async function syncLeaf(ctx: ExtensionContext): Promise<SyncOutcome> {
@@ -306,7 +306,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Handle a pi fork (/fork, /clone): the new session is now active. Locate the
+   * Handle a Pi fork (/fork, /clone): the new session is now active. Locate the
    * source conversation by previousSessionFile and create a new Claudian
    * conversation pointing at the forked session.
    */
@@ -365,7 +365,7 @@ export default function (pi: ExtensionAPI) {
         sessionId: newSessionId,
       },
       // Inherit the source title (Claudian's list shows something meaningful
-      // immediately); sync-title will reconcile the pi name on the next turn.
+      // immediately); sync-title will reconcile the Pi name on the next turn.
     };
 
     const file = path.join(sessionsDir, `${convId}.meta.json`);
@@ -392,7 +392,7 @@ export default function (pi: ExtensionAPI) {
    * selected point") and /fork ("Forked to new session") replaces the last chat
    * status line — and /tree also re-renders the chat — so an info `notify` sent
    * from `session_tree`/`session_start` gets overwritten before it can be read.
-   * A widget lives in a separate container that pi does not touch, so it is the
+   * A widget lives in a separate container that Pi does not touch, so it is the
    * reliable channel for automatic triggers. Manual `/sync-session` has no such
    * follow-up, so it uses a persistent status line instead.
    */

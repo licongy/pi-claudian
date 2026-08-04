@@ -6,10 +6,10 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-A monorepo of independently-published [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extensions for collaborating with [Claudian](https://github.com/claudian).
+A monorepo of independently-published [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extensions for collaborating with [Claudian](https://github.com/claudian).
 
 Each extension lives in its own package under `packages/*` and is published to
-npm as TypeScript source (pi loads it via jiti, no build step), so you can
+npm as TypeScript source (Pi loads it via jiti, no build step), so you can
 install only what you need:
 
 ```
@@ -20,8 +20,8 @@ pi install npm:<package-name>
 
 | Package                                              | Description                                                                          |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| [`@pi-claudian/sync-title`](packages/sync-title)     | Sync Claudian conversation titles into pi session names so they appear in `/resume`. |
-| [`@pi-claudian/sync-session`](packages/sync-session) | Sync pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.   |
+| [`@pi-claudian/sync-title`](packages/sync-title)     | Sync Claudian conversation titles into Pi session names so they appear in `/resume`. |
+| [`@pi-claudian/sync-session`](packages/sync-session) | Sync Pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.   |
 
 ## Development
 

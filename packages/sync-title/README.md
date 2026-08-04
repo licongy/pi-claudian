@@ -52,7 +52,7 @@ Notes:
   `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
   vaults match).
 - **Vault resolution** uses the session's own home directory (`ctx.cwd`, which
-  pi sets to the resumed session's recorded `cwd` — not `process.cwd()`),
+  Pi sets to the resumed session's recorded `cwd` — not `process.cwd()`),
   walking upward to the nearest `.claudian/sessions`. So resuming a Claudian
   session from a sub-directory of the vault still syncs correctly.
 - Never silently overwrites a session you named yourself: automatic triggers

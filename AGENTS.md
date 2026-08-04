@@ -4,9 +4,9 @@ Guidance for agents (and humans) working in this repo.
 
 ## Project
 
-Monorepo of independently-published pi extensions for Claudian collaboration.
+Monorepo of independently-published Pi extensions for Claudian collaboration.
 One publishable package per directory under `packages/*`. Each package publishes
-its `index.ts` **source** to npm (pi loads it via jiti, no compile step) so users
+its `index.ts` **source** to npm (Pi loads it via jiti, no compile step) so users
 can `pi install npm:<package-name>`.
 
 ## Commands
@@ -31,8 +31,8 @@ Per-package equivalents exist (e.g. `pnpm --filter @pi-claudian/sync-title typec
   extends it. `tsc` is used only for type-checking, not for emitting `dist/`.
 - Extension entry is `index.ts` exporting a default factory
   `(pi: ExtensionAPI) => void | Promise<void>`.
-- `pi.extensions` manifest points at the `.ts` source; pi loads it via jiti.
-- `@earendil-works/pi-coding-agent` is a peer dependency (provided by pi at
+- `pi.extensions` manifest points at the `.ts` source; Pi loads it via jiti.
+- `@earendil-works/pi-coding-agent` is a peer dependency (provided by Pi at
   runtime) and a dev dependency (for type-checking). It is imported as types
   only, so it never appears in published files.
 - Debug logging: every package vendors a `debug.ts` that prints to stderr when

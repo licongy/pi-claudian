@@ -28,7 +28,7 @@ pnpm format      # prettier --write . (fix formatting)
 ## Project layout
 
 - One publishable extension per directory under `packages/*`.
-- Each package publishes its `index.ts` **source** to npm; pi loads it via
+- Each package publishes its `index.ts` **source** to npm; Pi loads it via
   [jiti](https://github.com/unjs/jiti), so there is no build or `dist/` step.
 - Shared TypeScript config lives in `tsconfig.base.json` (`noEmit`); each package
   extends it. `tsc` is used only for type-checking.

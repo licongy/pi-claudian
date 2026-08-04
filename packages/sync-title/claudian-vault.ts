@@ -3,8 +3,8 @@
  *
  * Claudian stores conversation metadata under `<vault>/.claudian/sessions/`.
  * Earlier extensions assumed `process.cwd()` *is* the vault root. That breaks
- * when pi is launched from a sub-directory and a Claudian session is resumed:
- * pi sets the extension's `ctx.cwd` to the *session's* recorded home directory
+ * when Pi is launched from a sub-directory and a Claudian session is resumed:
+ * Pi sets the extension's `ctx.cwd` to the *session's* recorded home directory
  * (the jsonl header's `cwd`, see SessionManager.getCwd()), NOT to
  * `process.cwd()`. Deriving the sessions dir from `process.cwd()` therefore
  * misses the vault in that case and silently skips the sync.
@@ -19,7 +19,7 @@
  * session's own home, the resolved vault is always the one that owns the
  * session, so no extra cross-vault guard is needed.
  *
- * Source-only (pi loads it via jiti). Each @pi-claudian package vendors its
+ * Source-only (Pi loads it via jiti). Each @pi-claudian package vendors its
  * own copy, mirroring the debug.ts convention.
  */
 
