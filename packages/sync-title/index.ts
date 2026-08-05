@@ -25,12 +25,21 @@
  *
  *   trigger                  Pi name   Claudian title   action
  *   -----------------------  --------  ---------------  ---------------------------
- *   any                      empty     empty            nothing (retry if "pending")
+ *   any                      empty     empty            backoff retry (title not ready)
  *   any                      empty     ready            Claudian -> Pi
  *   any                      ready     empty            Pi -> Claudian (unless "pending")
  *   any                      ready     same             no-op
  *   agent_end (automatic)    ready     different        notify only (never auto-overwrite)
  *   /name or /sync-title     ready     different        prompt: Pi->C / C->Pi / keep / cancel
+ *
+ * Triggers: session_start (primary — on resume Claudian's meta is already
+ * complete, so the title is pulled in reliably), agent_end (per-turn, with a
+ * backoff retry that outlasts Claudian's async title generation), and the
+ * manual /sync-title command. Claudian links the Pi sessionId into its meta and
+ * generates the title asynchronously after the first turn, so a not-yet-ready
+ * title is retried on a backoff (see RETRY_DELAYS_MS). session_start is also the
+ * only trigger that retries while no meta matches yet, so plain `pi` sessions
+ * run inside a Claudian vault are not spun on every turn.
  *
  * Matching: first exact-match by sessionId, then fall back to the sessionFile
  * path (compared through fs.realpath so symlinked vaults match). The Claudian
@@ -56,13 +65,23 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   SessionInfoChangedEvent,
+  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
 import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 
-const RETRY_DELAY_MS = 10_000;
+/**
+ * Backoff schedule for retries while Claudian's title is still being generated.
+ * Claudian generates the title asynchronously (a separate model call) and only
+ * links the Pi sessionId/sessionFile into the meta after the first turn, so the
+ * extension waits and retries on this schedule rather than failing fast.
+ * Each entry is the delay before the next attempt; the array length is the
+ * total retry budget (~2 minutes), which outlasts Claudian's title generation.
+ */
+const RETRY_DELAYS_MS = [10_000, 15_000, 20_000, 30_000, 45_000];
+const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
 
 interface ClaudianMeta {
   id?: string;
@@ -149,10 +168,18 @@ export default function (pi: ExtensionAPI) {
   interface ReconcileOptions {
     /** Allow interactive conflict resolution (select dialog). False for automatic triggers. */
     interactive: boolean;
-    /** True when this is a delayed retry; do not re-queue on failure. */
-    isRetry?: boolean;
-    /** Allow scheduling a delayed retry when Claudian's title is still pending. */
+    /** Allow scheduling delayed retries when Claudian's title is not ready yet. */
     canRetry?: boolean;
+    /** Retry attempt index (0 = initial trigger). Caps the retry budget. */
+    attempt?: number;
+    /**
+     * Allow retrying when no matching Claudian meta is found yet. Only set by
+     * session_start: a brand-new conversation's sessionId is linked by Claudian
+     * only after the first turn, so the meta legitimately may not match yet.
+     * Other triggers (agent_end) rely on the next turn instead, to avoid a
+     * retry storm for plain `pi` sessions run inside a Claudian vault.
+     */
+    allowNoMatchRetry?: boolean;
   }
 
   /**
@@ -169,6 +196,9 @@ export default function (pi: ExtensionAPI) {
       return true; // ephemeral session, nothing to sync
     }
 
+    const attempt = opts.attempt ?? 0;
+    const canScheduleRetry = opts.canRetry === true && attempt < MAX_RETRY_ATTEMPTS;
+
     const sessionFile = ctx.sessionManager.getSessionFile() ?? null;
 
     const sessionsDir = await resolveClaudianSessionsDir(ctx);
@@ -179,6 +209,16 @@ export default function (pi: ExtensionAPI) {
 
     const found = await findMetaForSession(sessionsDir, sessionId, sessionFile);
     if (!found) {
+      // Inside a Claudian vault but no meta references this session yet. For a
+      // brand-new conversation this is expected: Claudian links the Pi sessionId
+      // (via get_state) only after the first turn completes. Only session_start
+      // retries here (see allowNoMatchRetry) so plain `pi` sessions run inside a
+      // vault don't spin retries on every turn.
+      if (canScheduleRetry && opts.allowNoMatchRetry) {
+        debug("no matching Claudian meta yet — scheduling retry #" + (attempt + 1));
+        scheduleRetry(ctx, sessionId, attempt + 1, true);
+        return false;
+      }
       debug("no matching Claudian meta — not a Claudian session");
       return true; // not a Claudian-originated session (e.g. a plain TUI session)
     }
@@ -191,17 +231,19 @@ export default function (pi: ExtensionAPI) {
     // --- Pi name empty: only Claudian -> Pi is possible ---
     if (!piName) {
       if (!cTitle) {
-        if (pending) {
-          debug(
-            "both empty, Claudian title pending (status:",
-            meta.titleGenerationStatus ?? "?",
-            ") —",
-            opts.isRetry ? "giving up" : opts.canRetry ? "scheduling retry" : "skipping",
-          );
-          if (opts.canRetry && !opts.isRetry) scheduleRetry(ctx, sessionId);
-          return false;
-        }
-        return true; // both genuinely empty, nothing to do
+        // Claudian title not ready yet: it may still be generating (status
+        // "pending") or, for a brand-new conversation, Claudian may not have
+        // written/linked the title at all. Retry on a backoff until the budget
+        // runs out, then wait for the next turn / session_start.
+        debug(
+          "both empty (status:",
+          meta.titleGenerationStatus ?? "?",
+          ") —",
+          canScheduleRetry ? "scheduling retry #" + (attempt + 1) : "giving up",
+        );
+        if (canScheduleRetry)
+          scheduleRetry(ctx, sessionId, attempt + 1, opts.allowNoMatchRetry ?? false);
+        return false;
       }
       // Claudian has a title, Pi does not -> write it through
       debug("writing session name from Claudian:", cTitle);
@@ -281,23 +323,51 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
-  function scheduleRetry(ctx: ExtensionContext, sessionId: string) {
+  function scheduleRetry(
+    ctx: ExtensionContext,
+    sessionId: string,
+    nextAttempt: number,
+    allowNoMatchRetry: boolean,
+  ) {
     if (pendingRetries.has(sessionId)) return; // a retry is already queued
-    debug("scheduling retry in", RETRY_DELAY_MS, "ms for", sessionId);
+    const delay = RETRY_DELAYS_MS[nextAttempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+    debug("scheduling retry #" + nextAttempt, "in", delay, "ms for", sessionId);
     const timer = setTimeout(async () => {
       pendingRetries.delete(sessionId);
       try {
-        await reconcile(ctx, { interactive: false, isRetry: true });
+        await reconcile(ctx, {
+          interactive: false,
+          canRetry: true,
+          attempt: nextAttempt,
+          allowNoMatchRetry,
+        });
       } catch (e) {
-        debug("retry failed:", String(e));
-        /* retry failed silently; wait for the next agent_end */
+        debug("retry #" + nextAttempt + " failed:", String(e));
+        /* failed attempt; the budget cap stops further auto-scheduling */
       }
-    }, RETRY_DELAY_MS);
+    }, delay);
     pendingRetries.set(sessionId, timer);
   }
 
-  // 1. Automatic: resolve after each reply ends (first turn usually has no title
-  //    yet -> auto 10s retry). Non-interactive: never auto-overwrite a named session.
+  // 0. On session start (especially resume): Claudian has already persisted the
+  //    conversation meta from a prior run, so this is the most reliable moment to
+  //    pull the Claudian title into the Pi session name. For a brand-new
+  //    conversation the meta may not be linked to this Pi session yet (Claudian
+  //    links the sessionId only after the first turn) — allowNoMatchRetry lets a
+  //    backoff retry catch the link once the first turn completes.
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
+    debug("session_start — attempting reconcile");
+    try {
+      await reconcile(ctx, { interactive: false, canRetry: true, allowNoMatchRetry: true });
+    } catch (e) {
+      debug("session_start sync error:", String(e));
+      /* ignore transient errors */
+    }
+  });
+
+  // 1. Automatic: resolve after each reply ends. For a new conversation the title
+  //    is usually still being generated asynchronously by Claudian -> backoff
+  //    retry until it lands. Non-interactive: never auto-overwrite a named session.
   pi.on("agent_end", async (_event: AgentEndEvent, ctx: ExtensionContext) => {
     debug("agent_end — attempting reconcile");
     try {
@@ -339,7 +409,7 @@ export default function (pi: ExtensionAPI) {
         const done = await reconcile(ctx, { interactive: true, canRetry: true });
         if (!done) {
           ctx.ui.notify(
-            "[Title Sync] Claudian title not ready; a retry is scheduled in 10 seconds",
+            "[Title Sync] Claudian title not ready yet; retrying in the background",
             "info",
           );
         }

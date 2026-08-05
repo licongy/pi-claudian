@@ -25,10 +25,10 @@ pi install npm:@pi-claudian/sync-title
 
 ## 用法
 
-自动：每轮 agent 回合之后，两个标题会被协调一致。无需任何操作。
+自动：在对话打开/恢复时以及每轮 agent 回合之后都会协调标题。无需任何操作。
 
-手动：运行 `/sync-title` 命令按需协调（若 Claudian 尚未生成标题，它会安排一次重试，
-并在冲突时提示你选择）。
+手动：运行 `/sync-title` 命令按需协调（会在冲突时提示你选择，并在 Claudian 标题尚未
+生成完成时持续重试）。
 
 ## 行为
 
@@ -36,7 +36,7 @@ pi install npm:@pi-claudian/sync-title
 
 | Pi 名称 | Claudian 标题                       | 操作                                                |
 | ------- | ----------------------------------- | --------------------------------------------------- |
-| 空      | 空                                  | 无操作（若 Claudian 仍在生成，则自动重试）          |
+| 空      | 空                                  | 等待并重试（标题尚未就绪）                          |
 | 空      | 已就绪                              | Claudian → Pi                                       |
 | 已就绪  | 空                                  | Pi → Claudian（Claudian 仍在生成时跳过）            |
 | 已就绪  | 相同                                | 无操作                                              |
@@ -45,6 +45,10 @@ pi install npm:@pi-claudian/sync-title
 
 说明：
 
+- **同步时机**：在对话打开或恢复时（主要的同步点——此时 Claudian 的元数据已完整落盘，
+  标题会被立即拉取）以及每轮 agent 回合之后。
+- Claudian 在**首轮之后**才异步生成对话标题，并在那时才把 Pi 会话 id 关联进元数据。当
+  标题尚未就绪时，本扩展会等待并以退避方式持续重试（总计约 2 分钟），而非首次失败即放弃。
 - 优先按 Pi 会话 UUID 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径
   （经 `fs.realpath` 比较，因此符号链接化的 vault 也能匹配）。
 - **vault 解析**使用会话自身的家目录（`ctx.cwd`，Pi 会将其设为所恢复会话记录的 `cwd`，
@@ -53,9 +57,11 @@ pi install npm:@pi-claudian/sync-title
 - 绝不静默覆盖你自行命名的会话：自动触发（回复之后）在两者不一致时仅通知；交互式触发则
   让你选择同步 Pi→Claudian、Claudian→Pi、两者都保留或取消。
 - 清除：用 `/name` 清空 Pi 名称（设为空）**不会**擦除 Claudian 的标题。
-- 在非 Claudian 管理的 vault（如纯 TUI 会话）中静默无操作。
-- Claudian 的标题生成是异步的；当其状态为 `pending` 时，本扩展会等待，而不是写回一个会
-  与生成器竞态的 Pi 名称。
+- 在非 Claudian 管理的 vault（如纯 TUI 会话）中静默无操作。即使在 Claudian vault 内直接
+  运行的纯 `pi` 会话也不会受影响：尚未关联的元数据仅在会话启动时探测一次，因此不会产生
+  每轮重试的噪声。
+- 当 Claudian 标题状态为 `pending` 时，本扩展会等待，而不是写回一个会与生成器竞态的 Pi
+  名称。
 - 写回 Claudian 是原子的（临时文件 + 重命名），因此 Claudian 永远不会读到写了一半的元
   数据文件。
 

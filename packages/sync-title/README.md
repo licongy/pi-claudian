@@ -27,10 +27,11 @@ pi install npm:@pi-claudian/sync-title
 
 ## Usage
 
-Automatic: after each agent turn the two titles are reconciled. No action required.
+Automatic: titles are reconciled when a conversation is opened/resumed and after
+each agent turn. No action required.
 
-Manual: run the `/sync-title` command to reconcile on demand (it will schedule a
-retry if Claudian has not generated its title yet, and will prompt on conflict).
+Manual: run the `/sync-title` command to reconcile on demand (it prompts on
+conflict and retries while Claudian's title is still being generated).
 
 ## Behavior
 
@@ -39,7 +40,7 @@ single decision table:
 
 | Pi name | Claudian title                            | Action                                                     |
 | ------- | ----------------------------------------- | ---------------------------------------------------------- |
-| empty   | empty                                     | nothing (auto-retry if Claudian is still generating)       |
+| empty   | empty                                     | wait and retry (title not ready yet)                       |
 | empty   | ready                                     | Claudian → Pi                                              |
 | ready   | empty                                     | Pi → Claudian (skipped while Claudian is still generating) |
 | ready   | same                                      | no-op                                                      |
@@ -48,6 +49,13 @@ single decision table:
 
 Notes:
 
+- **Sync triggers:** when a conversation is opened or resumed (the primary
+  sync moment — Claudian has already persisted its meta, so the title is pulled
+  in immediately) and after each agent turn.
+- Claudian generates the conversation title asynchronously _after_ the first
+  turn and only then links the Pi session id into its meta. While the title is
+  not ready yet, the extension waits and retries on a backoff (~2 minutes total)
+  rather than giving up after the first attempt.
 - Matches the Claudian meta file by Pi session UUID first, falling back to the
   `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
   vaults match).
@@ -61,9 +69,11 @@ Notes:
 - Clears: clearing the Pi name with `/name` (empty) does **not** erase the
   Claudian title.
 - Silent no-op outside of a Claudian-managed vault (e.g. plain TUI sessions).
-- Claudian title generation is asynchronous; while its status is `pending`, the
-  extension waits rather than writing back a Pi name that would race the
-  generator.
+  Plain `pi` sessions run _inside_ a Claudian vault are also left alone: the
+  not-yet-linked meta is only probed once when the session starts, so there is
+  no per-turn retry noise.
+- While Claudian's title status is `pending`, the extension waits rather than
+  writing back a Pi name that would race the generator.
 - Writes back to Claudian are atomic (tmp file + rename) so Claudian never reads
   a half-written meta file.
 
