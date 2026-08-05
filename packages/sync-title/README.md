@@ -30,8 +30,19 @@ pi install npm:@pi-claudian/sync-title
 Automatic: titles are reconciled when a conversation is opened/resumed and after
 each agent turn. No action required.
 
-Manual: run the `/sync-title` command to reconcile on demand (it prompts on
-conflict and retries while Claudian's title is still being generated).
+Manual: run the `/sync-title` command to reconcile the current session on
+demand (it prompts on conflict and retries while Claudian's title is still
+being generated).
+
+Batch: run `/sync-title-all` to reconcile **every** Claudian conversation in
+the current vault at once. This is the fix for conversations that ended after a
+single turn and were never resumed — their Pi session name stays empty because
+the per-session sync only fires on open/turn. It is non-destructive: it fills
+empty names in both directions (Claudian → Pi, Pi → Claudian) and **skips
+conflicts without overwriting**, reporting them so each can be resolved with
+`/sync-title`. The current session is synced live; others are synced by
+appending a `session_info` entry to their jsonl, which Pi picks up on the next
+resume. A plan is shown for confirmation before any files are written.
 
 ## Behavior
 

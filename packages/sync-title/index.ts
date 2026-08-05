@@ -55,7 +55,9 @@
  *
  * Usage:
  *   - Automatic: after each agent turn the two titles are reconciled
- *   - Manual: run /sync-title to reconcile on demand
+ *   - Manual: run /sync-title to reconcile the current session on demand
+ *   - Batch:    run /sync-title-all to reconcile every Claudian conversation
+ *               in this vault at once (fills empty names; skips conflicts)
  *   - Debug: PI_CLAUDIAN_DEBUG=1 pi
  */
 
@@ -67,6 +69,7 @@ import type {
   SessionInfoChangedEvent,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
@@ -92,6 +95,104 @@ interface ClaudianMeta {
     sessionFile?: string;
     sessionId?: string;
   };
+}
+
+/**
+ * Minimal shape of a Pi session jsonl entry, as needed by the batch sync. Pi
+ * writes one JSON object per line; the relevant fields here are `type`, `id`
+ * (tree node id, absent only on the v1 `session` header), and `name` (only on
+ * `session_info` entries).
+ */
+interface JsonlEntry {
+  type?: string;
+  id?: string;
+  name?: string;
+}
+
+/**
+ * Generate a short (8 hex char) id that does not collide with any existing
+ * entry id in a session file. Mirrors Pi's own `generateId()` so appended
+ * `session_info` entries are indistinguishable from Pi-written ones.
+ */
+function uniqueEntryId(existing: Set<string>): string {
+  for (let i = 0; i < 100; i++) {
+    const id = randomUUID().slice(0, 8);
+    if (!existing.has(id)) return id;
+  }
+  return randomUUID();
+}
+
+interface SessionScan {
+  /** The file exists and is readable. */
+  exists: boolean;
+  /** Latest `session_info` name (trimmed), or undefined when none was ever set. */
+  piName: string | undefined;
+  /** id of the last non-`session` entry — the tree leaf Pi would chain from. */
+  leafId: string | null;
+  /** All entry ids seen in the file (for collision-free id generation). */
+  ids: Set<string>;
+}
+
+/**
+ * Scan a Pi session jsonl to recover the current session name and tree leaf.
+ * `getSessionName()` walks entries in reverse for the latest `session_info`,
+ * and `_buildIndex()` sets the leaf id to the last non-`session` entry's id, so
+ * this reproduces both in a single forward pass. Corrupt / mid-write lines are
+ * skipped so a concurrent write cannot poison the scan.
+ */
+async function scanSessionFile(sessionFile: string): Promise<SessionScan> {
+  let text: string;
+  try {
+    text = await fs.readFile(sessionFile, "utf-8");
+  } catch {
+    return { exists: false, piName: undefined, leafId: null, ids: new Set() };
+  }
+  const ids = new Set<string>();
+  let piName: string | undefined;
+  let leafId: string | null = null;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let entry: JsonlEntry;
+    try {
+      entry = JSON.parse(trimmed) as JsonlEntry;
+    } catch {
+      continue; // skip corrupt / mid-write lines
+    }
+    if (typeof entry.id === "string") ids.add(entry.id);
+    if (entry.type === "session_info") {
+      piName = entry.name?.trim() || undefined;
+    }
+    if (entry.type !== "session" && typeof entry.id === "string") {
+      leafId = entry.id;
+    }
+  }
+  return { exists: true, piName, leafId, ids };
+}
+
+/**
+ * Append a `session_info` entry to another session's jsonl, mirroring Pi's
+ * `appendSessionInfo()` (sanitized name, `parentId` = current leaf, unique id).
+ * Used by the batch sync to backfill a Claudian title into a session that is
+ * not currently loaded (the live `pi.setSessionName()` API can only touch the
+ * current session). The file is re-scanned immediately before the append so a
+ * prior append to the same file advances the leaf correctly.
+ */
+async function appendSessionInfoToFile(sessionFile: string, name: string): Promise<void> {
+  const scan = await scanSessionFile(sessionFile);
+  if (!scan.exists) {
+    debug("session file missing, cannot write name:", sessionFile);
+    return;
+  }
+  const entry = {
+    type: "session_info",
+    id: uniqueEntryId(scan.ids),
+    parentId: scan.leafId,
+    timestamp: new Date().toISOString(),
+    name: name.replace(/[\r\n]+/g, " ").trim(),
+  };
+  await fs.appendFile(sessionFile, JSON.stringify(entry) + "\n", "utf-8");
+  debug("appended session_info to", sessionFile, ":", entry.name);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -349,6 +450,181 @@ export default function (pi: ExtensionAPI) {
     pendingRetries.set(sessionId, timer);
   }
 
+  /**
+   * Batch two-way sync across every Claudian conversation in the current vault.
+   * Driven by the `/sync-title-all` command. Unlike the per-session
+   * `reconcile()`, this scans all `conv-*.meta.json` files and applies the same
+   * decision table to each — but non-interactively: it only fills empty names
+   * (Claudian → Pi, Pi → Claudian) and **skips conflicts without overwriting**,
+   * reporting them so the user can resolve each with `/sync-title`.
+   *
+   * The current session is synced through the live `pi.setSessionName()` API
+   * (so Pi's in-memory state stays consistent); every other session is synced
+   * by appending a `session_info` entry directly to its jsonl, which Pi picks up
+   * on the next resume. A confirm dialog summarizes the plan before any writes.
+   */
+  async function reconcileAll(ctx: ExtensionCommandContext): Promise<void> {
+    const sessionsDir = await resolveClaudianSessionsDir(ctx);
+    if (!sessionsDir) {
+      ctx.ui.notify(
+        "[Title Sync] Not a Claudian vault (no .claudian/sessions enclosing cwd)",
+        "warning",
+      );
+      return;
+    }
+
+    let files: string[] = [];
+    try {
+      files = await fs.readdir(sessionsDir);
+    } catch (e) {
+      ctx.ui.notify(`[Title Sync] Cannot read sessions dir: ${String(e)}`, "error");
+      return;
+    }
+
+    const currentId = ctx.sessionManager.getSessionId() ?? "";
+    const currentFile = ctx.sessionManager.getSessionFile() ?? null;
+
+    type Action = "c2p" | "p2c" | "noop" | "skip";
+    interface BatchItem {
+      meta: ClaudianMeta;
+      file: string;
+      sessionFile: string;
+      isCurrent: boolean;
+      piName: string | undefined;
+      cTitle: string | undefined;
+      action: Action;
+      name: string;
+      reason: string;
+    }
+
+    const items: BatchItem[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".meta.json")) continue; // skip .deleted.json / .inputs.json
+      const file = path.join(sessionsDir, f);
+      let meta: ClaudianMeta;
+      try {
+        meta = JSON.parse(await fs.readFile(file, "utf-8"));
+      } catch {
+        continue; // skip corrupt / mid-write meta
+      }
+      const sessionFile = meta.providerState?.sessionFile;
+      if (!sessionFile) continue; // not a Pi-backed conversation
+
+      const isCurrent =
+        (!!currentId && !!meta.sessionId && meta.sessionId === currentId) ||
+        (!!currentFile && (await samePath(sessionFile, currentFile)));
+
+      // The live name is authoritative for the current session (the jsonl on
+      // disk may lag Pi's in-memory state mid-turn); every other session reads
+      // its name from the jsonl.
+      const piName = isCurrent
+        ? pi.getSessionName()?.trim() || undefined
+        : (await scanSessionFile(sessionFile)).piName;
+      const cTitle = meta.title?.trim() || undefined;
+      const pending = meta.titleGenerationStatus === "pending";
+
+      let action: Action = "skip";
+      let name = "";
+      let reason = "";
+
+      if (!piName && !cTitle) {
+        reason = "not-ready";
+      } else if (!piName && cTitle) {
+        action = "c2p";
+        name = cTitle;
+      } else if (piName && !cTitle) {
+        if (pending) {
+          reason = "pending";
+        } else {
+          action = "p2c";
+          name = piName;
+        }
+      } else if (piName === cTitle) {
+        action = "noop";
+        reason = "in-sync";
+      } else {
+        reason = "conflict";
+      }
+
+      items.push({ meta, file, sessionFile, isCurrent, piName, cTitle, action, name, reason });
+    }
+
+    const c2p = items.filter((i) => i.action === "c2p");
+    const p2c = items.filter((i) => i.action === "p2c");
+    const conflicts = items.filter((i) => i.reason === "conflict");
+    const notReady = items.filter((i) => i.reason === "not-ready" || i.reason === "pending");
+    const inSync = items.filter((i) => i.action === "noop");
+
+    if (c2p.length === 0 && p2c.length === 0) {
+      ctx.ui.notify(
+        `[Title Sync] Nothing to sync: ${inSync.length} in sync, ` +
+          `${conflicts.length} conflicts, ${notReady.length} not ready ` +
+          `(of ${items.length} conversations)`,
+        "info",
+      );
+      return;
+    }
+
+    // Summarize the plan and confirm before touching any files.
+    const lines: string[] = [`Scanned ${items.length} Claudian conversations.`];
+    const summarize = (header: string, list: BatchItem[], render: (i: BatchItem) => string) => {
+      if (!list.length) return;
+      lines.push("", `${header} (${list.length}):`);
+      for (const i of list) lines.push(`  • ${render(i)}`);
+    };
+    summarize(
+      "Claudian → Pi",
+      c2p,
+      (i) => `"${i.cTitle}"${i.isCurrent ? "  [current session]" : ""}`,
+    );
+    summarize("Pi → Claudian", p2c, (i) => `"${i.piName}"`);
+    if (conflicts.length) {
+      lines.push("", `Skipped conflicts (${conflicts.length}) — resume + /sync-title to resolve:`);
+      for (const i of conflicts) lines.push(`  • Pi "${i.piName}" vs Claudian "${i.cTitle}"`);
+    }
+    lines.push("", "Proceed?");
+
+    if (ctx.hasUI) {
+      const ok = await ctx.ui.confirm("Sync all session titles", lines.join("\n"));
+      if (!ok) {
+        ctx.ui.notify("[Title Sync] Cancelled", "info");
+        return;
+      }
+    }
+
+    let done = 0;
+    for (const i of c2p) {
+      try {
+        if (i.isCurrent) {
+          applySessionName(i.name);
+        } else {
+          await appendSessionInfoToFile(i.sessionFile, i.name);
+        }
+        done++;
+      } catch (e) {
+        debug("batch Claudian→Pi failed for", i.sessionFile, ":", String(e));
+      }
+    }
+    for (const i of p2c) {
+      try {
+        await writeClaudianMeta(i.file, i.meta, {
+          title: i.name,
+          titleGenerationStatus: "success",
+        });
+        done++;
+      } catch (e) {
+        debug("batch Pi→Claudian failed for", i.file, ":", String(e));
+      }
+    }
+
+    ctx.ui.notify(
+      `[Title Sync] Synced ${done}/${c2p.length + p2c.length} ` +
+        `(${c2p.length} Claudian→Pi, ${p2c.length} Pi→Claudian)` +
+        (conflicts.length ? `; ${conflicts.length} conflict(s) skipped` : ""),
+      "info",
+    );
+  }
+
   // 0. On session start (especially resume): Claudian has already persisted the
   //    conversation meta from a prior run, so this is the most reliable moment to
   //    pull the Claudian title into the Pi session name. For a brand-new
@@ -416,6 +692,27 @@ export default function (pi: ExtensionAPI) {
       } catch (e) {
         debug("/sync-title failed:", String(e));
         ctx.ui.notify(`[Title Sync] Sync failed: ${String(e)}`, "error");
+      }
+    },
+  });
+
+  // 4. Manual batch trigger: /sync-title-all — reconcile every Claudian
+  //    conversation in this vault at once. Non-destructive: fills empty names
+  //    in both directions and skips conflicts (reports them so each can be
+  //    resolved individually with /sync-title). The current session is synced
+  //    live; others are synced by appending to their jsonl (picked up on next
+  //    resume). Prompts a plan + confirm before writing.
+  pi.registerCommand("sync-title-all", {
+    description:
+      "Batch-sync the Claudian title and Pi session name for ALL conversations in this vault " +
+      "(fills empty names; skips conflicts without overwriting)",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        debug("manual /sync-title-all invoked");
+        await reconcileAll(ctx);
+      } catch (e) {
+        debug("/sync-title-all failed:", String(e));
+        ctx.ui.notify(`[Title Sync] Batch sync failed: ${String(e)}`, "error");
       }
     },
   });
