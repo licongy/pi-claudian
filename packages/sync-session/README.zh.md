@@ -48,6 +48,10 @@ pi install npm:@pi-claudian/sync-session
 
 - **`/tree`**（或通过快捷键进行树导航）之后，新的叶子 id 会被写入与之匹配的 Claudian
   会话的 `providerState.leafEntryId` 中。
+- **每轮对话结束后**（`agent_settled`），会重新同步当前叶子。这对 **`/tree` + 重新提问**
+  流程至关重要：`/tree` 事件只写入了*导航到的*叶子，而重新提问创建的新条目会将叶子进一步
+  推进。若没有这次后续同步，Claudian 会打开到重新提问之前的位置，显示旧（被放弃）的分支。
+  同步还会更新 `lastActivityAt`，让 Claudian 检测到变化并重新读取会话文件，而非使用过期缓存。
 - **`/fork`** / **`/clone`** 之后，会为 fork 出的会话创建一个新的 `conv-*.meta.json`，
   复制源会话的标题/模型，并指向新的 `sessionFile` / `sessionId` / `leafEntryId`。该
   fork 随即会出现在 Claudian 的会话列表中。

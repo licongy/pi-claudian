@@ -13,12 +13,17 @@
  *   meta.providerState.sessionId    = Pi session UUID
  *   meta.providerState.leafEntryId  = the Pi entry the conversation is at
  *
- * Claudian never watches Pi for changes, so two Pi operations leave its
+ * Claudian never watches Pi for changes, so several Pi operations leave its
  * metadata stale:
  *
  * - /tree (navigateTree): stays in the SAME session file but moves the active
  *   leaf to an earlier entry (optionally appending a branch_summary). Claudian
  *   still points at the old leaf, so resuming opens the wrong branch.
+ * - /tree + re-ask: after navigating, the user edits and resubmits a new
+ *   message, creating new entries that advance the leaf PAST the navigated-to
+ *   position. The `session_tree` event only captured the navigated-to leaf, not
+ *   the new entries. Without a follow-up sync, Claudian opens at the wrong
+ *   (pre-re-ask) position.
  * - /fork & /clone (fork): creates a NEW session file + UUID. Claudian has no
  *   conversation for the new session, so it never appears in Claudian's list.
  *
@@ -26,6 +31,14 @@
  *
  * - On `session_tree`: writes the new leaf id into the matching meta's
  *   `providerState.leafEntryId`.
+ * - On `agent_settled`: re-syncs the current leaf after every turn. This is
+ *   essential for the /tree + re-ask flow — the session_tree event wrote the
+ *   *navigated-to* leaf, but the re-ask created new entries that advanced the
+ *   leaf further. agent_settled fires once the turn is fully done (after any
+ *   retries/compaction), so the written leafEntryId is the final position.
+ *   Silent when the leaf is already in sync; transient widget only on actual
+ *   write. Also bumps `lastActivityAt` so Claudian detects the conversation
+ *   changed and re-reads the session file instead of serving a stale cache.
  * - On `session_start` with reason "fork": creates a new conv-*.meta.json for
  *   the forked session, copying the title/model from the source conversation
  *   and pointing at the new sessionFile/sessionId/leafEntryId.
@@ -48,6 +61,9 @@
  *
  * Matching: by Pi sessionId first, falling back to the sessionFile path.
  * Writes are atomic (tmp + rename) so Claudian never reads a half-written file.
+ * patchMeta re-reads the file right before writing so concurrent Claudian
+ * changes (lastActivityAt, usage, etc.) are preserved — only the explicit
+ * sync fields are overlaid, not the stale snapshot from the initial scan.
  * Silent no-op outside of a Claudian-managed vault.
  *
  * Vault resolution: Pi sets the extension's `ctx.cwd` to the session's recorded
@@ -65,6 +81,7 @@
  */
 
 import type {
+  AgentSettledEvent,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -91,6 +108,7 @@ interface ClaudianMeta {
   createdAt?: number;
   updatedAt?: number;
   lastResponseAt?: number;
+  lastActivityAt?: number;
   sessionId?: string | null;
   selectedModel?: string;
   providerState?: ClaudianProviderState;
@@ -188,13 +206,27 @@ export default function (pi: ExtensionAPI) {
     return null;
   }
 
-  /** Atomically patch a Claudian meta file (write tmp + rename). */
+  /**
+   * Atomically patch a Claudian meta file (write tmp + rename).
+   *
+   * Re-reads the file right before writing so concurrent changes by Claudian
+   * (e.g. lastActivityAt, usage) are preserved — only the explicit `patch`
+   * fields are overlaid on the latest on-disk content, not the stale snapshot
+   * from findMeta().
+   */
   async function patchMeta(
     file: string,
     meta: ClaudianMeta,
     patch: Partial<ClaudianMeta>,
   ): Promise<void> {
-    const updated = { ...meta, ...patch, updatedAt: Date.now() };
+    let latest = meta;
+    try {
+      latest = JSON.parse(await fs.readFile(file, "utf-8")) as ClaudianMeta;
+    } catch {
+      // file deleted or corrupt — fall back to the snapshot we already have
+    }
+    const now = Date.now();
+    const updated = { ...latest, ...patch, updatedAt: now };
     const tmp = file + ".sync-tmp";
     await fs.writeFile(tmp, JSON.stringify(updated, null, 2), "utf-8");
     await fs.rename(tmp, file);
@@ -312,7 +344,14 @@ export default function (pi: ExtensionAPI) {
       sessionFile: sessionFile ?? meta.providerState?.sessionFile,
       sessionId: meta.providerState?.sessionId ?? sessionId,
     };
-    const patch: Partial<ClaudianMeta> = { providerState };
+    const patch: Partial<ClaudianMeta> = {
+      providerState,
+      // Bump lastActivityAt so Claudian detects the conversation changed
+      // and re-reads the session file instead of serving a stale cache.
+      // Claudian never watches Pi for changes; without this, its display
+      // freezes at the pre-/tree state even though leafEntryId is correct.
+      lastActivityAt: Date.now(),
+    };
     if (topSessionIdStale) patch.sessionId = sessionId;
     await patchMeta(file, meta, patch);
     debug(
@@ -391,6 +430,7 @@ export default function (pi: ExtensionAPI) {
       providerId: CLAUDIAN_PROVIDER_PI,
       createdAt: now,
       updatedAt: now,
+      lastActivityAt: now,
       lastResponseAt: undefined,
       sessionId: newSessionId,
       providerState: {
@@ -491,7 +531,22 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // 3. Manual: re-sync the current leaf on demand.
+  // 3. agent_settled: after every turn the leaf may have advanced (most
+  //    critically after /tree navigation + re-ask, where the session_tree
+  //    event only wrote the *navigated-to* leaf, not the new entries created
+  //    by the re-ask). Syncing here keeps Claudian's leafEntryId current
+  //    without requiring a manual /sync-session. Silent when the leaf is
+  //    already in sync; transient widget only when a meta was actually written.
+  pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+    try {
+      const o = await syncLeaf(ctx);
+      if (o.written) presentOutcome(ctx, o, true);
+    } catch (e) {
+      debug("agent_settled sync error:", String(e));
+    }
+  });
+
+  // 4. Manual: re-sync the current leaf on demand.
   pi.registerCommand("sync-session", {
     description:
       "Sync the Pi session tree position (leaf) and any fork into Claudian's session metadata (.claudian/sessions)",

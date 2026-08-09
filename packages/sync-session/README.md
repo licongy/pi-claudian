@@ -54,6 +54,13 @@ Automatic:
 
 - After **`/tree`** (or tree navigation via keybinding), the new leaf id is
   written into the matching Claudian conversation's `providerState.leafEntryId`.
+- After **every turn** (`agent_settled`), the current leaf is re-synced. This is
+  essential for the **`/tree` + re-ask** flow: the `/tree` event only wrote the
+  _navigated-to_ leaf, but the re-ask creates new entries that advance the leaf
+  further. Without this follow-up sync, Claudian would open at the pre-re-ask
+  position and show the old (abandoned) branch. The sync also bumps
+  `lastActivityAt` so Claudian detects the change and re-reads the session file
+  instead of serving a stale cache.
 - After **`/fork`** / **`/clone`**, a new `conv-*.meta.json` is created for the
   forked session, copying the source title/model and pointing at the new
   `sessionFile` / `sessionId` / `leafEntryId`. The fork then shows up in
