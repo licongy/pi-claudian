@@ -86,6 +86,22 @@ import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 const RETRY_DELAYS_MS = [10_000, 15_000, 20_000, 30_000, 45_000];
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
 
+/**
+ * Check whether the current session has any message entries (user or assistant).
+ * Claudian links the Pi sessionId into its meta only after the first turn, so a
+ * session with no messages cannot have a matching meta yet — scanning the
+ * Claudian sessions directory would always return null and just waste I/O.
+ * Returns true on error to preserve the scan (safe default).
+ */
+function sessionHasMessages(ctx: ExtensionContext): boolean {
+  try {
+    return ctx.sessionManager.getBranch().some((e) => e.type === "message");
+  } catch {
+    debug("sessionHasMessages: getBranch() failed — assuming content present (safe default)");
+    return true;
+  }
+}
+
 interface ClaudianMeta {
   id?: string;
   title?: string;
@@ -308,7 +324,15 @@ export default function (pi: ExtensionAPI) {
       return true; // not a Claudian-originated session (e.g. a plain TUI session)
     }
 
-    const found = await findMetaForSession(sessionsDir, sessionId, sessionFile);
+    // Claudian links the Pi sessionId into its meta only after the first turn
+    // completes, so a session with no message entries cannot have a matching
+    // meta yet. Skip the directory scan entirely in that case — it would always
+    // return null and just waste I/O. This also lets us cancel retries for idle
+    // plain `pi` sessions started inside a Claudian vault (no conversation at
+    // all) instead of scanning the directory 6 times over ~2 minutes.
+    const hasContent = sessionHasMessages(ctx);
+
+    const found = hasContent ? await findMetaForSession(sessionsDir, sessionId, sessionFile) : null;
     if (!found) {
       // Inside a Claudian vault but no meta references this session yet. For a
       // brand-new conversation this is expected: Claudian links the Pi sessionId
@@ -316,6 +340,16 @@ export default function (pi: ExtensionAPI) {
       // retries here (see allowNoMatchRetry) so plain `pi` sessions run inside a
       // vault don't spin retries on every turn.
       if (canScheduleRetry && opts.allowNoMatchRetry) {
+        // On retries (attempt > 0), if no conversation has happened yet, stop
+        // retrying. By retry time a real Claudian conversation would have its
+        // first turn underway (message entries present); an idle plain `pi`
+        // session never will. The initial session_start (attempt 0) always
+        // schedules retry #1 because a brand-new Claudian conversation also
+        // has no content yet — the meta is linked only after the first turn.
+        if (attempt > 0 && !hasContent) {
+          debug("no matching Claudian meta and no conversation content — not a Claudian session");
+          return true;
+        }
         debug("no matching Claudian meta yet — scheduling retry #" + (attempt + 1));
         scheduleRetry(ctx, sessionId, attempt + 1, true);
         return false;
