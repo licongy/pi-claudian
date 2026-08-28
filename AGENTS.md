@@ -23,6 +23,32 @@ Run from the repo root:
 
 Per-package equivalents exist (e.g. `pnpm --filter @pi-claudian/sync-title typecheck`).
 
+## Investigation discipline (open-ended diagnosis/research tasks)
+
+These rules apply to any goal-directed information-seeking work — debugging,
+forensics, research, analysis, option evaluation, planning. For breadth
+tasks (surveys, codebase orientation) state the deliverable and depth instead
+of a single decisive question, and converge on that. They do NOT apply to
+routine edits with a clear scope: implementation legitimately requires
+reading broadly. The implementation-side analog of the same failure is scope
+creep — gold-plating, refactoring beyond the ask, endless self-verification:
+deliver what was asked, then stop.
+
+- **Declare the decisive question before investigating.** State in one or
+  two sentences: what question must be answered, and what evidence would
+  settle it. Investigate only toward that. If a task has no single decisive
+  question, say so and propose one before starting.
+- **Per-call relevance gate**: before any search or read, it must be able to
+  change the answer or the recommended action. Narrative completeness,
+  curiosity, attribution of side facts, and "closing every loose end" are not
+  reasons. Record unresolved side questions in the final answer as
+  "unverified" or "inferred" instead of investigating them.
+- **Deliver when the decisive question is answered.** Stop there. Budget is
+  a magnitude check only (~25 tool calls): once clearly past it, stop and
+  report conclusion, evidence, and unknowns, then ask whether to continue.
+- **Checkpoint while working**: restate the current hypothesis and what
+  remains to be proven at each step, so the user can redirect or stop early.
+
 ## Conventions
 
 - TypeScript: strict, ESM (`"type": "module"`), `module: NodeNext`,
