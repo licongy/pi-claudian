@@ -1,6 +1,6 @@
 {
   "name": "@pi-claudian/auto-save-to-markdown",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Pi extension that automatically saves each completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch.",
   "type": "module",
   "license": "MIT",
