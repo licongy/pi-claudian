@@ -1,5 +1,13 @@
 # @pi-claudian/auto-save-to-markdown
 
+## 0.1.1
+
+### Patch Changes
+
+- 2a954c9: Fix assistant thinking being rendered after the answer text; thinking now always precedes the text it produced (chronological order).
+
+  Frontmatter: rename `cwd` to `project_root`, and add `tokens_cache_read` / `tokens_cache_write`. `tokens` now counts all billed tokens including cached ones, so totals are comparable with provider-side accounting (e.g. OpenRouter activity).
+
 ## 0.1.0
 
 ### Minor Changes
