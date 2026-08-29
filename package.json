@@ -1,6 +1,6 @@
 {
   "name": "pi-claudian",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A monorepo of independently-published Pi extensions for collaborating with Claudian.",
   "private": true,
   "type": "module",
