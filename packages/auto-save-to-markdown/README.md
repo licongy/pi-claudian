@@ -78,11 +78,15 @@ session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.json
 
 # Fix login redirect loop
 
-## User · 13:05:12
+User · 13:05:12
+===
 
 The login page redirects in a loop after the auth refactor...
 
-## Assistant · 13:05:40 · claude-sonnet-4-5
+---
+
+Assistant · 13:05:40 · claude-sonnet-4-5
+===
 
 <details>
 <summary>Thinking</summary>
@@ -98,12 +102,21 @@ I'll trace the middleware order first.
 - `read` — {"filePath":"/Users/me/project/src/auth/middleware.ts"}
 
 > **Tool · read** /Users/me/project/src/auth/middleware.ts — 120 lines …
+
+---
 ```
 
 The body renders user and assistant messages in full (assistant thinking is
 kept in a collapsible `<details>` block) and summarizes each tool call and
 result in one line, so the file stays readable while still showing what the
 agent did.
+
+Each message block opens with a setext level-1 info header (`User · …`,
+underlined with `===`) — one level above the `##` headings AI content
+typically starts with, and distinguishable from content `#` headings when
+parsing — and ends with a `---` separator wrapped in single blank lines
+(extra blank lines are trimmed), so blocks are easy to tell apart both when
+reading and when splitting the file programmatically.
 
 ### Fragmented thinking repair
 

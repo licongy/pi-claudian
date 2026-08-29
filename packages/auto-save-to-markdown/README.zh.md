@@ -68,11 +68,15 @@ session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.json
 
 # 修复登录重定向死循环
 
-## User · 13:05:12
+User · 13:05:12
+===
 
 auth 重构之后登录页一直重定向死循环……
 
-## Assistant · 13:05:40 · claude-sonnet-4-5
+---
+
+Assistant · 13:05:40 · claude-sonnet-4-5
+===
 
 <details>
 <summary>Thinking</summary>
@@ -88,11 +92,18 @@ auth 重构之后登录页一直重定向死循环……
 - `read` — {"filePath":"/Users/me/project/src/auth/middleware.ts"}
 
 > **Tool · read** /Users/me/project/src/auth/middleware.ts — 120 lines …
+
+---
 ```
 
 正文完整渲染 user / assistant 消息（assistant 的 thinking 放在可折叠的
 `<details>` 块中），每个工具调用和结果各压缩成一行摘要，既可读又能看出
 agent 做了什么。
+
+每个消息块以 setext 一级信息头（`User · …`，下一行以 `===` 下划）开头——
+高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题区分
+开——并以"上下各一个空行"包裹的 `---` 分隔线结尾（多余空行会被裁剪），
+无论是阅读还是程序化切分，都能清楚地区分每个消息块。
 
 ### 碎片化 thinking 修复
 

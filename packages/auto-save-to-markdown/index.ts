@@ -20,6 +20,10 @@
  * - Frontmatter: title, session id, tree (branch key), model, provider,
  *   cumulative cost and tokens (input, output, cache read/write), message
  *   count, created/updated timestamps, project root and session file.
+ * - Body format: every message block opens with a setext-H1 info header
+ *   (`User · HH:MM:SS` / `Assistant · HH:MM:SS · model`, underlined with
+ *   `===`, distinct from the `#`/`##` ATX headings AI content uses) and
+ *   ends with a `---` separator wrapped in single blank lines.
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
@@ -278,10 +282,21 @@ export default function (pi: ExtensionAPI) {
 
   // ---------- markdown rendering ----------
 
+  /**
+   * Strip leading blank lines and trailing whitespace from a rendered block,
+   * so joins and separators always keep exactly one blank line around them
+   * no matter what blank lines the content itself starts or ends with.
+   */
+  function tighten(s: string): string {
+    return s.replace(/^(?:[ \t]*\n)+/, "").replace(/\s+$/, "");
+  }
+
   function renderAssistant(m: AssistantMessage, t: string): string {
     // Render blocks in their original chronological order: thinking always
     // precedes the text it produced, instead of being grouped after the fact.
-    const header = `## Assistant · ${t}${m.model ? ` · ${m.model}` : ""}`;
+    // Setext H1 (`===` underline): one level above the `##` headings AI
+    // content typically starts with, and distinct from content `#` headings.
+    const header = `Assistant · ${t}${m.model ? ` · ${m.model}` : ""}\n===`;
     const parts: string[] = [];
     const thinkings: string[] = [];
     const flushThinking = () => {
@@ -332,7 +347,7 @@ export default function (pi: ExtensionAPI) {
       const m = e.message;
       const t = clock(e.timestamp);
       if (m.role === "user") {
-        blocks.push(`## User · ${t}\n\n${userText(m.content)}`);
+        blocks.push(`User · ${t}\n===\n\n${userText(m.content)}`);
       } else if (m.role === "assistant") {
         blocks.push(renderAssistant(m, t));
       } else if (m.role === "toolResult") {
@@ -341,7 +356,12 @@ export default function (pi: ExtensionAPI) {
       // Other roles (custom, bashExecution, branchSummary, compactionSummary)
       // are not part of the rendered conversation record.
     }
-    return blocks.join("\n\n");
+    if (blocks.length === 0) return "";
+    // Every block ends with a `---` separator wrapped in single blank lines
+    // (the blank line above also keeps `---` from turning the last content
+    // line into a setext H2). The trailing separator after the final block
+    // makes later appends uniform: new blocks simply continue after it.
+    return `${blocks.map(tighten).join("\n\n---\n\n")}\n\n---\n`;
   }
 
   // ---------- frontmatter ----------
@@ -560,8 +580,8 @@ export default function (pi: ExtensionAPI) {
 
     if (fullCreate) {
       const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined);
-      const body = renderEntries(plan.pathMessages);
-      const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}\n`;
+      const body = renderEntries(plan.pathMessages); // ends with the trailing separator
+      const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
       await atomicWrite(filePath, content);
       debug("created conversation file:", filePath);
       return {
@@ -584,10 +604,15 @@ export default function (pi: ExtensionAPI) {
 
     const existing = await fs.readFile(filePath, "utf-8");
     const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, parseCreated(existing));
-    const appended = renderEntries(plan.appendEntries);
+    const appended = renderEntries(plan.appendEntries); // ends with the trailing separator
     let updated = replaceFrontmatter(existing, frontmatter(meta));
-    if (!updated.endsWith("\n")) updated += "\n";
-    updated += `\n${appended}\n`;
+    // Collapse trailing blank lines to a single newline so the separator
+    // always has exactly one blank line above it, whatever earlier saves
+    // (or a manual edit) left behind.
+    updated = updated.replace(/\s*$/, "\n");
+    // Files written by the old format end without a `---` separator; add one
+    // at the boundary so old and new content stay delimited.
+    updated += updated.endsWith("---\n") ? `\n${appended}` : `\n---\n\n${appended}`;
     await atomicWrite(filePath, updated);
     debug("appended", plan.appendEntries.length, "entries to:", filePath);
     return {
