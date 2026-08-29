@@ -67,6 +67,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   SessionInfoChangedEvent,
+  SessionShutdownEvent,
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
@@ -82,9 +83,22 @@ import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
  * extension waits and retries on this schedule rather than failing fast.
  * Each entry is the delay before the next attempt; the array length is the
  * total retry budget (~2 minutes), which outlasts Claudian's title generation.
+ * Pending retries are cancelled on session_shutdown (quit, reload, /new, fork,
+ * /resume) and dropped if their ctx went stale before firing — the replacement
+ * session re-arms sync via its own session_start.
  */
 const RETRY_DELAYS_MS = [10_000, 15_000, 20_000, 30_000, 45_000];
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
+
+/**
+ * Detect Pi's stale-ctx error. Every captured ctx (and the pi API) throws
+ * after the session it belonged to was replaced (newSession, fork,
+ * switchSession — including Claudian conversation switches) or reloaded,
+ * because each replacement rebuilds the extension runtime.
+ */
+function isStaleContextError(e: unknown): boolean {
+  return e instanceof Error && e.message.includes("stale after session replacement");
+}
 
 /**
  * Check whether the current session has any message entries (user or assistant).
@@ -477,6 +491,13 @@ export default function (pi: ExtensionAPI) {
           allowNoMatchRetry,
         });
       } catch (e) {
+        if (isStaleContextError(e)) {
+          // The session this retry was armed for has been replaced or
+          // reloaded; its successor fires session_start on a fresh ctx and
+          // re-arms sync itself, so the stale retry is simply dropped.
+          debug("retry #" + nextAttempt + " dropped — session replaced or reloaded");
+          return;
+        }
         debug("retry #" + nextAttempt + " failed:", String(e));
         /* failed attempt; the budget cap stops further auto-scheduling */
       }
@@ -749,5 +770,17 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`[Title Sync] Batch sync failed: ${String(e)}`, "error");
       }
     },
+  });
+
+  // 5. On session teardown (quit, /reload, /new, fork, or /resume — including
+  //    Claudian conversation switches): the captured ctx in any queued retry
+  //    timer becomes stale the moment this session is torn down, so cancel
+  //    the timers before that happens. The replacement session fires its own
+  //    session_start and re-arms sync on a fresh ctx.
+  pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+    if (pendingRetries.size === 0) return;
+    debug("session_shutdown — cancelling", pendingRetries.size, "pending retry timer(s)");
+    for (const timer of pendingRetries.values()) clearTimeout(timer);
+    pendingRetries.clear();
   });
 }

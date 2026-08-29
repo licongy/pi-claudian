@@ -105,6 +105,16 @@ kept in a collapsible `<details>` block) and summarizes each tool call and
 result in one line, so the file stays readable while still showing what the
 agent did.
 
+### Fragmented thinking repair
+
+Some upstream reasoning streams (observed with z-ai/GLM via OpenRouter) store
+thinking with every word — or every CJK character — on its own line: the
+original spaces collapse into leading spaces of one-word fragments joined by
+runs of newlines. The extension detects this corruption (lines starting with a
+single leading space, or a majority of 1–2-character fragment lines) and
+re-joins the fragments into flowing text, so saved thinking reads normally
+instead of one word per line. Clean thinking blocks are written untouched.
+
 `cost` and the token fields cover the whole saved branch and include cached
 tokens (priced at the provider's cache rates), so the totals are comparable
 with provider-side accounting (e.g. OpenRouter activity). Requests that never

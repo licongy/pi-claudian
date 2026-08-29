@@ -32,6 +32,9 @@
  * - Compaction: files archive the ORIGINAL messages (getBranch() returns the
  *   raw tree path, not the compaction-aware context), so a compacted session
  *   still exports its complete history.
+ * - Thinking repair: reasoning blocks stored with the upstream
+ *   newline-fragmentation corruption (one word per line) are detected and
+ *   re-joined into flowing text before saving; clean thinking is untouched.
  *
  * Manual command: `/save-conversation` saves the current branch immediately
  * and reports the file path.
@@ -120,6 +123,59 @@ interface BranchMeta {
   created: string;
   updated: string;
   projectRoot: string;
+}
+
+// ---------- thinking fragmentation repair ----------
+
+/**
+ * Some upstream reasoning streams (observed with z-ai/GLM via OpenRouter) store
+ * thinking as one word — or one CJK character — per line: the stream splits
+ * tokens into fragments joined by runs of newlines, and the original spaces
+ * survive only as leading spaces of the fragments. The saved markdown then has
+ * every token on its own line, which is miserable to read and bloats storage.
+ *
+ * Detection uses two signatures validated against ~520 real thinking blocks:
+ * lines starting with exactly one space (a survived word separator; blank-ish
+ * " " lines included), and an excess of 1–2-char non-list-marker lines (CJK
+ * fragments carry no leading space). Clean thinking never matches either.
+ *
+ * Repair strips all newlines — run length carries no recoverable meaning (the
+ * same paragraph boundary appears as 1, 2 or 3 newlines, while 4–7 can sit
+ * mid-sentence) — and collapses the doubled spaces left by lone-space
+ * fragments. Clean blocks pass through untouched.
+ */
+
+/** Line whose single leading space is a survived word separator. */
+function isThinkingSigLine(line: string): boolean {
+  return line === " " || /^ [^ *+\-\d]/.test(line);
+}
+
+/** Non-blank line of 1–2 chars that is not a standalone list marker. */
+function isThinkingShortFragment(line: string): boolean {
+  const s = line.trim();
+  if (s.length === 0 || s.length > 2) return false;
+  return !/^([-*+]|\d+[.)])$/.test(s);
+}
+
+/** Whether a thinking block shows the newline-fragmentation corruption. */
+function isFragmentedThinking(s: string): boolean {
+  const lines = s.split("\n");
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  if (nonBlank.length === 0) return false;
+  const sig = lines.filter(isThinkingSigLine).length;
+  if (nonBlank.length < 8) return nonBlank.length >= 3 && sig >= 3;
+  if (sig / lines.length >= 0.12) return true;
+  return nonBlank.filter(isThinkingShortFragment).length / nonBlank.length >= 0.4;
+}
+
+/** Repair newline-fragmented thinking; clean thinking is returned unchanged. */
+function repairThinking(s: string): string {
+  if (!isFragmentedThinking(s)) return s;
+  debug("repairing fragmented thinking block:", s.length, "chars");
+  return s
+    .replace(/\n+/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 export default function (pi: ExtensionAPI) {
@@ -242,7 +298,7 @@ export default function (pi: ExtensionAPI) {
         flushThinking();
         parts.push(b.text);
       } else if (b.type === "thinking") {
-        thinkings.push(b.thinking);
+        thinkings.push(repairThinking(b.thinking));
       } else if (b.type === "toolCall") {
         flushThinking();
         calls.push(`- \`${b.name}\` — ${previewArgs(b.arguments)}`);
