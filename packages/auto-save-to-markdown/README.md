@@ -78,14 +78,14 @@ session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.json
 
 # Fix login redirect loop
 
-User · 13:05:12
+User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:12</span>
 ===
 
 The login page redirects in a loop after the auth refactor...
 
 ---
 
-Assistant · 13:05:40 · claude-sonnet-4-5
+Assistant <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:40 · claude-sonnet-4-5</span>
 ===
 
 > [!tldr]- Thinking
@@ -113,12 +113,15 @@ previews are wrapped in inline code spans (with a delimiter sized to survive
 backticks inside the content), so raw tool output renders literally instead of
 being parsed as markdown.
 
-Each message block opens with a setext level-1 info header (`User · …`,
-underlined with `===`) — one level above the `##` headings AI content
-typically starts with, and distinguishable from content `#` headings when
-parsing — and ends with a `---` separator wrapped in single blank lines
-(extra blank lines are trimmed), so blocks are easy to tell apart both when
-reading and when splitting the file programmatically.
+Each message block opens with a setext level-1 info header (`User`,
+`Assistant`) underlined with `===` — one level above the `##` headings AI
+content typically starts with, and distinguishable from content `#` headings
+when parsing. The header's metadata (local date-time, and the model for
+assistant messages) sits in a small faint `<span>` (`0.5em`, Obsidian's
+`--text-faint` color), so the role stays visually dominant while the details
+remain a glance away. Each block ends with a `---` separator wrapped in single
+blank lines (extra blank lines are trimmed), so blocks are easy to tell apart
+both when reading and when splitting the file programmatically.
 
 ### Fragmented thinking repair
 

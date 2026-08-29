@@ -21,9 +21,12 @@
  *   cumulative cost and tokens (input, output, cache read/write), message
  *   count, created/updated timestamps, project root and session file.
  * - Body format: every message block opens with a setext-H1 info header
- *   (`User · HH:MM:SS` / `Assistant · HH:MM:SS · model`, underlined with
- *   `===`, distinct from the `#`/`##` ATX headings AI content uses) and
- *   ends with a `---` separator wrapped in single blank lines.
+ *   (`User <span …>YYYY-MM-DD HH:MM:SS</span>` /
+ *   `Assistant <span …>YYYY-MM-DD HH:MM:SS · model</span>`, where the span
+ *   renders the metadata as small faint text — Obsidian CSS variables, so it
+ *   degrades gracefully elsewhere — underlined with `===`, distinct from the
+ *   `#`/`##` ATX headings AI content uses) and ends with a `---` separator
+ *   wrapped in single blank lines.
  * - Tool call/result folding: calls live in the assistant entry while their
  *   results are separate toolResult entries; saves pair them by toolCall id
  *   and fold each assistant block's calls, with a short result preview each,
@@ -224,10 +227,28 @@ export default function (pi: ExtensionAPI) {
     );
   }
 
-  /** Local-time clock label for a message entry: HH:MM:SS. */
-  function clock(iso: string): string {
+  /** Local-time label for a message entry: YYYY-MM-DD HH:MM:SS. */
+  function dateTime(iso: string): string {
     const d = new Date(iso);
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+      ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    );
+  }
+
+  /**
+   * Wrap header metadata (timestamp, model) in a small faint span: 0.5em text
+   * in Obsidian's `--text-faint` color, so the role stays visually dominant.
+   * HTML-escaped because the model string lands inside a raw HTML span.
+   */
+  function metaSpan(text: string): string {
+    const safe = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<span style="font-size: 0.5em; color: var(--text-faint);">${safe}</span>`;
+  }
+
+  /** Setext-H1 info header: `Role <span …>meta</span>` underlined with `===`. */
+  function messageHeader(role: string, meta: string): string {
+    return `${role} ${metaSpan(meta)}\n===`;
   }
 
   /** Make a string safe for use as a filename component. */
@@ -387,7 +408,7 @@ export default function (pi: ExtensionAPI) {
     // precedes the text it produced, instead of being grouped after the fact.
     // Setext H1 (`===` underline): one level above the `##` headings AI
     // content typically starts with, and distinct from content `#` headings.
-    const header = `Assistant · ${t}${m.model ? ` · ${m.model}` : ""}\n===`;
+    const header = messageHeader("Assistant", [t, m.model].filter(Boolean).join(" · "));
     const parts: string[] = [];
     const thinkings: string[] = [];
     const flushThinking = () => {
@@ -436,9 +457,9 @@ export default function (pi: ExtensionAPI) {
     const blocks: string[] = [];
     for (const e of entries) {
       const m = e.message;
-      const t = clock(e.timestamp);
+      const t = dateTime(e.timestamp);
       if (m.role === "user") {
-        blocks.push(`User · ${t}\n===\n\n${userText(m.content)}`);
+        blocks.push(`${messageHeader("User", t)}\n\n${userText(m.content)}`);
       } else if (m.role === "assistant") {
         blocks.push(renderAssistant(m, t, results));
       } else if (m.role === "toolResult") {

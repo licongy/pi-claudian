@@ -68,14 +68,14 @@ session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.json
 
 # 修复登录重定向死循环
 
-User · 13:05:12
+User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:12</span>
 ===
 
 auth 重构之后登录页一直重定向死循环……
 
 ---
 
-Assistant · 13:05:40 · claude-sonnet-4-5
+Assistant <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:40 · claude-sonnet-4-5</span>
 ===
 
 > [!tldr]- Thinking
@@ -101,10 +101,12 @@ Obsidian 对 HTML 块内嵌 Markdown 的渲染不可靠；在非 Obsidian 环境
 压过内容中的反引号序列），工具的原始输出因此按字面渲染，不会被当作
 Markdown 解析。
 
-每个消息块以 setext 一级信息头（`User · …`，下一行以 `===` 下划）开头——
-高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题区分
-开——并以"上下各一个空行"包裹的 `---` 分隔线结尾（多余空行会被裁剪），
-无论是阅读还是程序化切分，都能清楚地区分每个消息块。
+每个消息块以 setext 一级信息头（`User`、`Assistant`，下一行以 `===` 下划）
+开头——高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题
+区分开。信息头的元数据（本地日期时间，assistant 消息还带模型名）放在一个小号
+浅色 `<span>` 中（`0.5em`，Obsidian 的 `--text-faint` 颜色），角色名因此保持
+醒目，细节又触手可及。每个消息块以"上下各一个空行"包裹的 `---` 分隔线结尾
+（多余空行会被裁剪），无论是阅读还是程序化切分，都能清楚地区分每个消息块。
 
 ### 碎片化 thinking 修复
 
