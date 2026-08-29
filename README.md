@@ -45,6 +45,10 @@ PI_CLAUDIAN_DEBUG=1 pi              # show debug output inline
 PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
 ```
 
+Any value other than an explicit false token (empty, `0`, `false`, `no`, `off` —
+case-insensitive) enables it; unset the variable (or set one of those tokens)
+to turn it off.
+
 ## Releasing
 
 This repo uses [Changesets](https://github.com/changesets/changesets) for independent versioning and publishing of each extension.

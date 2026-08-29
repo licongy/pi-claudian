@@ -64,7 +64,8 @@ deliver what was asked, then stop.
   runtime) and a dev dependency (for type-checking). It is imported as types
   only, so it never appears in published files.
 - Debug logging: every package vendors a `debug.ts` that prints to stderr when
-  `PI_CLAUDIAN_DEBUG` is set. See `packages/sync-title/debug.ts` for the pattern.
+  `PI_CLAUDIAN_DEBUG` is set to an enabling value (anything except empty, `0`,
+  `false`, `no`, `off`). See `packages/sync-title/debug.ts` for the pattern.
 - Before committing, run `pnpm typecheck` and `pnpm lint`.
 
 ## Releases

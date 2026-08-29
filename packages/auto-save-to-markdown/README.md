@@ -165,6 +165,10 @@ always contains the complete conversation, not the compacted context.
 PI_CLAUDIAN_DEBUG=1 pi
 ```
 
+Any value other than an explicit false token (empty, `0`, `false`, `no`, `off` —
+case-insensitive) enables it; unset the variable (or set one of those tokens)
+to turn it off.
+
 ## License
 
 MIT

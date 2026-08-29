@@ -105,6 +105,9 @@ PI_CLAUDIAN_DEBUG=1 pi              # 内联显示调试输出
 PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # 捕获到文件
 ```
 
+除显式假值（空串、`0`、`false`、`no`、`off`，忽略大小写）以外的任何值都会开启
+调试；取消该变量或将其设为其中某个假值即可关闭。
+
 留意带 `[pi-claudian]` 标记的行，例如 `synced leaf:` 或 `created fork conversation:`。
 
 ## 许可证
