@@ -57,10 +57,12 @@ cost: 0.023401
 tokens: 18745
 tokens_input: 15230
 tokens_output: 3515
+tokens_cache_read: 0
+tokens_cache_write: 0
 messages: 8
 created: "2026-08-29T05:05:12.000Z"
 updated: "2026-08-29T05:42:10.000Z"
-cwd: "/Users/me/project"
+project_root: "/Users/me/project"
 session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.jsonl"
 ---
 
@@ -91,6 +93,10 @@ auth 重构之后登录页一直重定向死循环……
 正文完整渲染 user / assistant 消息（assistant 的 thinking 放在可折叠的
 `<details>` 块中），每个工具调用和结果各压缩成一行摘要，既可读又能看出
 agent 做了什么。
+
+`cost` 和 token 字段统计整条已保存分支，且包含缓存 token（按供应商缓存
+价格计费），因此总计可与供应商侧账单（如 OpenRouter Activity）对照。未
+进入会话树的请求（失败重试、共用同一 API key 的其他会话）不在其中。
 
 ## 分支行为
 

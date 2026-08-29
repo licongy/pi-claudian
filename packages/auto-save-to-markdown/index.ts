@@ -18,8 +18,8 @@
  *   of the deepest message entry at file creation, and <time> is the local
  *   file-creation timestamp (YYYYMMDD-HHmmss).
  * - Frontmatter: title, session id, tree (branch key), model, provider,
- *   cumulative cost and tokens, message count, created/updated timestamps,
- *   cwd and session file.
+ *   cumulative cost and tokens (input, output, cache read/write), message
+ *   count, created/updated timestamps, project root and session file.
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
@@ -114,10 +114,12 @@ interface BranchMeta {
   cost: number;
   tokensInput: number;
   tokensOutput: number;
+  tokensCacheRead: number;
+  tokensCacheWrite: number;
   messages: number;
   created: string;
   updated: string;
-  cwd: string;
+  projectRoot: string;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -221,23 +223,32 @@ export default function (pi: ExtensionAPI) {
   // ---------- markdown rendering ----------
 
   function renderAssistant(m: AssistantMessage, t: string): string {
-    const texts: string[] = [];
-    const thinkings: string[] = [];
-    const calls: string[] = [];
-    for (const b of m.content) {
-      if (b.type === "text") texts.push(b.text);
-      else if (b.type === "thinking") thinkings.push(b.thinking);
-      else if (b.type === "toolCall") calls.push(`- \`${b.name}\` — ${previewArgs(b.arguments)}`);
-    }
-
+    // Render blocks in their original chronological order: thinking always
+    // precedes the text it produced, instead of being grouped after the fact.
     const header = `## Assistant · ${t}${m.model ? ` · ${m.model}` : ""}`;
     const parts: string[] = [];
-    if (texts.length) parts.push(texts.join("\n\n"));
-    if (thinkings.length) {
-      parts.push(
-        `<details>\n<summary>Thinking</summary>\n\n${thinkings.join("\n\n")}\n\n</details>`,
-      );
+    const thinkings: string[] = [];
+    const flushThinking = () => {
+      if (thinkings.length) {
+        parts.push(
+          `<details>\n<summary>Thinking</summary>\n\n${thinkings.join("\n\n")}\n\n</details>`,
+        );
+        thinkings.length = 0;
+      }
+    };
+    const calls: string[] = [];
+    for (const b of m.content) {
+      if (b.type === "text") {
+        flushThinking();
+        parts.push(b.text);
+      } else if (b.type === "thinking") {
+        thinkings.push(b.thinking);
+      } else if (b.type === "toolCall") {
+        flushThinking();
+        calls.push(`- \`${b.name}\` — ${previewArgs(b.arguments)}`);
+      }
     }
+    flushThinking();
     if (calls.length) parts.push(`**Tool calls**\n\n${calls.join("\n")}`);
     if (m.errorMessage) parts.push(`> Error: ${m.errorMessage.replace(/\s+/g, " ").trim()}`);
     if (parts.length === 0) parts.push("_(empty response)_");
@@ -292,13 +303,19 @@ export default function (pi: ExtensionAPI) {
     if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
     if (meta.provider) lines.push(`provider: ${yamlQuote(meta.provider)}`);
     lines.push(`cost: ${meta.cost.toFixed(6)}`);
-    lines.push(`tokens: ${meta.tokensInput + meta.tokensOutput}`);
+    // `tokens` counts everything billed, including cached tokens, so it is
+    // comparable with provider-side token totals (e.g. OpenRouter activity).
+    lines.push(
+      `tokens: ${meta.tokensInput + meta.tokensOutput + meta.tokensCacheRead + meta.tokensCacheWrite}`,
+    );
     lines.push(`tokens_input: ${meta.tokensInput}`);
     lines.push(`tokens_output: ${meta.tokensOutput}`);
+    lines.push(`tokens_cache_read: ${meta.tokensCacheRead}`);
+    lines.push(`tokens_cache_write: ${meta.tokensCacheWrite}`);
     lines.push(`messages: ${meta.messages}`);
     lines.push(`created: ${yamlQuote(meta.created)}`);
     lines.push(`updated: ${yamlQuote(meta.updated)}`);
-    lines.push(`cwd: ${yamlQuote(meta.cwd)}`);
+    lines.push(`project_root: ${yamlQuote(meta.projectRoot)}`);
     if (meta.sessionFile) lines.push(`session_file: ${yamlQuote(meta.sessionFile)}`);
     lines.push("---");
     return lines.join("\n");
@@ -323,18 +340,21 @@ export default function (pi: ExtensionAPI) {
     let cost = 0;
     let tokensInput = 0;
     let tokensOutput = 0;
+    let tokensCacheRead = 0;
+    let tokensCacheWrite = 0;
     for (const e of pathMessages) {
       const m = e.message;
+      const usage = m.role === "assistant" ? m.usage : m.role === "toolResult" ? m.usage : null;
       if (m.role === "assistant") {
         model = m.model;
         provider = m.provider;
-        cost += m.usage?.cost?.total ?? 0;
-        tokensInput += m.usage?.input ?? 0;
-        tokensOutput += m.usage?.output ?? 0;
-      } else if (m.role === "toolResult" && m.usage) {
-        cost += m.usage.cost?.total ?? 0;
-        tokensInput += m.usage.input ?? 0;
-        tokensOutput += m.usage.output ?? 0;
+      }
+      if (usage) {
+        cost += usage.cost?.total ?? 0;
+        tokensInput += usage.input ?? 0;
+        tokensOutput += usage.output ?? 0;
+        tokensCacheRead += usage.cacheRead ?? 0;
+        tokensCacheWrite += usage.cacheWrite ?? 0;
       }
     }
     const now = new Date().toISOString();
@@ -348,10 +368,12 @@ export default function (pi: ExtensionAPI) {
       cost,
       tokensInput,
       tokensOutput,
+      tokensCacheRead,
+      tokensCacheWrite,
       messages: pathMessages.length,
       created: created ?? now,
       updated: now,
-      cwd: ctx.cwd,
+      projectRoot: ctx.cwd,
     };
   }
 

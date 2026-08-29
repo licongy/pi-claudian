@@ -67,10 +67,12 @@ cost: 0.023401
 tokens: 18745
 tokens_input: 15230
 tokens_output: 3515
+tokens_cache_read: 0
+tokens_cache_write: 0
 messages: 8
 created: "2026-08-29T05:05:12.000Z"
 updated: "2026-08-29T05:42:10.000Z"
-cwd: "/Users/me/project"
+project_root: "/Users/me/project"
 session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.jsonl"
 ---
 
@@ -102,6 +104,12 @@ The body renders user and assistant messages in full (assistant thinking is
 kept in a collapsible `<details>` block) and summarizes each tool call and
 result in one line, so the file stays readable while still showing what the
 agent did.
+
+`cost` and the token fields cover the whole saved branch and include cached
+tokens (priced at the provider's cache rates), so the totals are comparable
+with provider-side accounting (e.g. OpenRouter activity). Requests that never
+landed in the session tree (failed retries, other sessions sharing the same
+API key) are necessarily excluded.
 
 ## Branch behavior
 
