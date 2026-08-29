@@ -18,6 +18,15 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
 
+  packages/auto-save-to-markdown:
+    devDependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: ^0.82.1
+        version: 0.82.1(ws@8.21.1)(zod@4.4.3)
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+
   packages/sync-session:
     devDependencies:
       '@earendil-works/pi-coding-agent':
@@ -67,6 +76,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-env@3.972.62':
     resolution: {integrity: sha512-BkDrk2cNjed31IKin/Oksb2ziF+gfuyRskFVuT4EU9Mep7M8Y/d8DJG4+anHme4Vuse7CwaEscwEfGyR6mzBhQ==}

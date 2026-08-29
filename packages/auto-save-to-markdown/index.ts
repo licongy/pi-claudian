@@ -1,0 +1,599 @@
+/**
+ * @pi-claudian/auto-save-to-markdown
+ *
+ * Automatically saves the current conversation to a markdown file after every
+ * completed agent turn, with session metadata in a YAML frontmatter block.
+ *
+ * Behavior:
+ *
+ * - Trigger: `agent_settled` — fires once per user prompt, after the turn is
+ *   fully done (including automatic retries and compaction), so each save
+ *   captures a settled state of the conversation.
+ * - Location: a subfolder of the session's working directory (`ctx.cwd`, the
+ *   directory the session was started in), defaulting to `ai-conversations`.
+ *   Override with the PI_SAVE_CONVERSATION_DIR environment variable; set it to
+ *   "." or "" to save directly into the working directory.
+ * - Filename: `<title>-<tree>-<time>.md`, where <title> is the session name
+ *   (or a slug of the first user message when unnamed), <tree> is the 8-hex id
+ *   of the deepest message entry at file creation, and <time> is the local
+ *   file-creation timestamp (YYYYMMDD-HHmmss).
+ * - Frontmatter: title, session id, tree (branch key), model, provider,
+ *   cumulative cost and tokens, message count, created/updated timestamps,
+ *   cwd and session file.
+ * - Branching: each file records exactly ONE branch (the root→leaf path
+ *   returned by sessionManager.getBranch()). State is persisted via
+ *   `pi.appendEntry()` custom entries, which are part of the session tree
+ *   itself — they are not sent to the LLM and not rendered in the TUI. On
+ *   every save the extension finds the file whose latest saved position is the
+ *   deepest entry still on the current path; if the tree moved elsewhere
+ *   (e.g. /tree navigation followed by a new prompt), no file matches and a
+ *   new file is created with the full current branch. Continuing an existing
+ *   branch appends only the messages that are new since the last save.
+ * - Compaction: files archive the ORIGINAL messages (getBranch() returns the
+ *   raw tree path, not the compaction-aware context), so a compacted session
+ *   still exports its complete history.
+ *
+ * Manual command: `/save-conversation` saves the current branch immediately
+ * and reports the file path.
+ *
+ * Installation:
+ *   pi install npm:@pi-claudian/auto-save-to-markdown
+ *
+ * Debug:
+ *   PI_CLAUDIAN_DEBUG=1 pi
+ */
+
+import type {
+  AgentSettledEvent,
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  SessionEntry,
+  SessionMessageEntry,
+} from "@earendil-works/pi-coding-agent";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { debug } from "./debug.js";
+
+const CUSTOM_TYPE = "pi-claudian-auto-save-markdown";
+const ENV_SUBDIR = "PI_SAVE_CONVERSATION_DIR";
+const DEFAULT_SUBDIR = "ai-conversations";
+const COMMAND = "save-conversation";
+const NOTIFY_TAG = "[AutoSave]";
+
+const MAX_TITLE_LENGTH = 60;
+const TITLE_FALLBACK_LENGTH = 40;
+const TOOL_RESULT_PREVIEW = 300;
+const TOOL_ARGS_PREVIEW = 160;
+
+type AgentMessage = SessionMessageEntry["message"];
+type UserMessage = Extract<AgentMessage, { role: "user" }>;
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+
+/**
+ * Per-save state persisted in the session tree via pi.appendEntry().
+ * `file` is the bare filename inside the target directory, so changing the
+ * configured directory (env var) moves future saves without breaking
+ * resolution — the file is simply recreated from the full branch if missing.
+ */
+interface SaveState {
+  branchKey: string;
+  lastSavedEntryId: string | null;
+  file: string;
+}
+
+function isSaveState(v: unknown): v is SaveState {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as Record<string, unknown>;
+  return (
+    typeof s.branchKey === "string" &&
+    s.branchKey.length > 0 &&
+    (s.lastSavedEntryId === null || typeof s.lastSavedEntryId === "string") &&
+    typeof s.file === "string" &&
+    s.file.length > 0
+  );
+}
+
+interface SaveResult {
+  message: string;
+  /** A file was actually written (created or appended). */
+  wrote: boolean;
+  /** The write created a brand-new file (vs appending to an existing one). */
+  created: boolean;
+  file: string | null;
+}
+
+interface BranchMeta {
+  title: string;
+  sessionId: string | null;
+  sessionFile: string | null;
+  tree: string;
+  model: string | null;
+  provider: string | null;
+  cost: number;
+  tokensInput: number;
+  tokensOutput: number;
+  messages: number;
+  created: string;
+  updated: string;
+  cwd: string;
+}
+
+export default function (pi: ExtensionAPI) {
+  /**
+   * Resolve the target directory. The env var may hold a relative folder name
+   * (resolved against the session cwd), an absolute path, or "." / "" for the
+   * working directory itself. When unset, the default subfolder is used.
+   */
+  function targetDir(ctx: ExtensionContext): string {
+    const env = process.env[ENV_SUBDIR];
+    if (env === undefined) return path.join(ctx.cwd, DEFAULT_SUBDIR);
+    const raw = env.trim();
+    if (raw === "" || raw === ".") return ctx.cwd;
+    return path.resolve(ctx.cwd, raw);
+  }
+
+  // ---------- formatting helpers ----------
+
+  function pad(n: number): string {
+    return String(n).padStart(2, "0");
+  }
+
+  /** Local-time filename timestamp: YYYYMMDD-HHmmss. */
+  function fileTimestamp(d: Date): string {
+    return (
+      `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+      `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    );
+  }
+
+  /** Local-time clock label for a message entry: HH:MM:SS. */
+  function clock(iso: string): string {
+    const d = new Date(iso);
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  /** Make a string safe for use as a filename component. */
+  function sanitizeFilenamePart(s: string): string {
+    return s
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/[\\/:*?"<>|]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\s/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "")
+      .slice(0, MAX_TITLE_LENGTH)
+      .replace(/[-.]+$/g, "");
+  }
+
+  /** Extract the plain text of a user message content (string or blocks). */
+  function userText(content: UserMessage["content"]): string {
+    if (typeof content === "string") return content;
+    return content
+      .map((b) =>
+        b.type === "text" ? b.text : `_[image: ${"mimeType" in b ? b.mimeType : "unknown"}]_`,
+      )
+      .join("\n\n");
+  }
+
+  function firstUserText(messages: SessionMessageEntry[]): string | undefined {
+    for (const e of messages) {
+      if (e.message.role === "user") return userText(e.message.content) || undefined;
+    }
+    return undefined;
+  }
+
+  /** Title for the filename: session name, else a slug of the first user message. */
+  function titleForFilename(ctx: ExtensionContext, firstUser: string | undefined): string {
+    const name = ctx.sessionManager.getSessionName()?.trim();
+    if (name) return sanitizeFilenamePart(name) || "untitled";
+    if (firstUser) {
+      const slug = sanitizeFilenamePart(firstUser.slice(0, TITLE_FALLBACK_LENGTH));
+      if (slug) return slug;
+    }
+    return "untitled";
+  }
+
+  /** Title for the frontmatter / document heading. */
+  function displayTitle(ctx: ExtensionContext, firstUser: string | undefined): string {
+    const name = ctx.sessionManager.getSessionName()?.trim();
+    if (name) return name;
+    if (firstUser) {
+      const snippet = firstUser.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE_LENGTH);
+      if (snippet) return snippet;
+    }
+    return "untitled";
+  }
+
+  function previewArgs(args: unknown): string {
+    let s: string;
+    try {
+      s = JSON.stringify(args) ?? "";
+    } catch {
+      s = String(args);
+    }
+    s = s.replace(/\s+/g, " ").trim();
+    return s.length > TOOL_ARGS_PREVIEW ? s.slice(0, TOOL_ARGS_PREVIEW) + " …" : s;
+  }
+
+  // ---------- markdown rendering ----------
+
+  function renderAssistant(m: AssistantMessage, t: string): string {
+    const texts: string[] = [];
+    const thinkings: string[] = [];
+    const calls: string[] = [];
+    for (const b of m.content) {
+      if (b.type === "text") texts.push(b.text);
+      else if (b.type === "thinking") thinkings.push(b.thinking);
+      else if (b.type === "toolCall") calls.push(`- \`${b.name}\` — ${previewArgs(b.arguments)}`);
+    }
+
+    const header = `## Assistant · ${t}${m.model ? ` · ${m.model}` : ""}`;
+    const parts: string[] = [];
+    if (texts.length) parts.push(texts.join("\n\n"));
+    if (thinkings.length) {
+      parts.push(
+        `<details>\n<summary>Thinking</summary>\n\n${thinkings.join("\n\n")}\n\n</details>`,
+      );
+    }
+    if (calls.length) parts.push(`**Tool calls**\n\n${calls.join("\n")}`);
+    if (m.errorMessage) parts.push(`> Error: ${m.errorMessage.replace(/\s+/g, " ").trim()}`);
+    if (parts.length === 0) parts.push("_(empty response)_");
+    return `${header}\n\n${parts.join("\n\n")}`;
+  }
+
+  function renderToolResult(m: ToolResultMessage): string {
+    const texts: string[] = [];
+    for (const b of m.content) {
+      if (b.type === "text") texts.push(b.text);
+      else texts.push(`_[image: ${b.mimeType}]_`);
+    }
+    const flat = texts.join(" ").replace(/\s+/g, " ").trim();
+    const capped =
+      flat.length > TOOL_RESULT_PREVIEW ? flat.slice(0, TOOL_RESULT_PREVIEW) + " …" : flat;
+    const status = m.isError ? " (error)" : "";
+    const line = `> **Tool · ${m.toolName}${status}** ${capped}`.trim();
+    return line;
+  }
+
+  /** Render a chronological list of message entries as markdown blocks. */
+  function renderEntries(entries: SessionMessageEntry[]): string {
+    const blocks: string[] = [];
+    for (const e of entries) {
+      const m = e.message;
+      const t = clock(e.timestamp);
+      if (m.role === "user") {
+        blocks.push(`## User · ${t}\n\n${userText(m.content)}`);
+      } else if (m.role === "assistant") {
+        blocks.push(renderAssistant(m, t));
+      } else if (m.role === "toolResult") {
+        blocks.push(renderToolResult(m));
+      }
+      // Other roles (custom, bashExecution, branchSummary, compactionSummary)
+      // are not part of the rendered conversation record.
+    }
+    return blocks.join("\n\n");
+  }
+
+  // ---------- frontmatter ----------
+
+  function yamlQuote(s: string): string {
+    const safe = s.replace(/[\r\n]+/g, " ");
+    return `"${safe.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+
+  function frontmatter(meta: BranchMeta): string {
+    const lines: string[] = ["---"];
+    lines.push(`title: ${yamlQuote(meta.title)}`);
+    if (meta.sessionId) lines.push(`session_id: ${yamlQuote(meta.sessionId)}`);
+    lines.push(`tree: ${yamlQuote(meta.tree)}`);
+    if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
+    if (meta.provider) lines.push(`provider: ${yamlQuote(meta.provider)}`);
+    lines.push(`cost: ${meta.cost.toFixed(6)}`);
+    lines.push(`tokens: ${meta.tokensInput + meta.tokensOutput}`);
+    lines.push(`tokens_input: ${meta.tokensInput}`);
+    lines.push(`tokens_output: ${meta.tokensOutput}`);
+    lines.push(`messages: ${meta.messages}`);
+    lines.push(`created: ${yamlQuote(meta.created)}`);
+    lines.push(`updated: ${yamlQuote(meta.updated)}`);
+    lines.push(`cwd: ${yamlQuote(meta.cwd)}`);
+    if (meta.sessionFile) lines.push(`session_file: ${yamlQuote(meta.sessionFile)}`);
+    lines.push("---");
+    return lines.join("\n");
+  }
+
+  /** Recover the original creation timestamp from an existing frontmatter block. */
+  function parseCreated(content: string): string | undefined {
+    const m = content.match(/^created: "(.*)"$/m);
+    if (!m) return undefined;
+    const iso = m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    return Number.isNaN(Date.parse(iso)) ? undefined : iso;
+  }
+
+  function computeMeta(
+    ctx: ExtensionContext,
+    pathMessages: SessionMessageEntry[],
+    branchKey: string,
+    created: string | undefined,
+  ): BranchMeta {
+    let model: string | null = null;
+    let provider: string | null = null;
+    let cost = 0;
+    let tokensInput = 0;
+    let tokensOutput = 0;
+    for (const e of pathMessages) {
+      const m = e.message;
+      if (m.role === "assistant") {
+        model = m.model;
+        provider = m.provider;
+        cost += m.usage?.cost?.total ?? 0;
+        tokensInput += m.usage?.input ?? 0;
+        tokensOutput += m.usage?.output ?? 0;
+      } else if (m.role === "toolResult" && m.usage) {
+        cost += m.usage.cost?.total ?? 0;
+        tokensInput += m.usage.input ?? 0;
+        tokensOutput += m.usage.output ?? 0;
+      }
+    }
+    const now = new Date().toISOString();
+    return {
+      title: displayTitle(ctx, firstUserText(pathMessages)),
+      sessionId: ctx.sessionManager.getSessionId(),
+      sessionFile: ctx.sessionManager.getSessionFile() ?? null,
+      tree: branchKey,
+      model,
+      provider,
+      cost,
+      tokensInput,
+      tokensOutput,
+      messages: pathMessages.length,
+      created: created ?? now,
+      updated: now,
+      cwd: ctx.cwd,
+    };
+  }
+
+  // ---------- save planning ----------
+
+  interface SavePlan {
+    dir: string;
+    filename: string;
+    branchKey: string;
+    /** Write the full branch content (new branch, or target file missing). */
+    fullCreate: boolean;
+    /** Entries to append when continuing an existing file. */
+    appendEntries: SessionMessageEntry[];
+    /** Full root→leaf message list of the current branch (for meta/full renders). */
+    pathMessages: SessionMessageEntry[];
+    /** State of the file being continued, when not a full create. */
+    state: SaveState | null;
+  }
+
+  function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
+    return e.type === "message";
+  }
+
+  /**
+   * Decide which file the current branch belongs to and what to write.
+   *
+   * Every save appends a custom entry recording {branchKey, lastSavedEntryId,
+   * file}. Those entries live in the session tree, so a branch's own latest
+   * state is always recoverable — including after resume, /tree navigation,
+   * or /fork. The file to continue is the one whose most recent saved position
+   * is the deepest entry still on the current root→leaf path; when the tree
+   * moved (navigation + re-ask), no position matches and a new file starts.
+   */
+  function computePlan(ctx: ExtensionContext): SavePlan | null {
+    const pathEntries = ctx.sessionManager.getBranch();
+    const pathMessages = pathEntries.filter(isMessageEntry);
+    if (pathMessages.length === 0) return null;
+
+    const pos = new Map<string, number>();
+    pathEntries.forEach((e, i) => pos.set(e.id, i));
+
+    const latestForFile = new Map<string, SaveState>();
+    for (const e of ctx.sessionManager.getEntries()) {
+      if (e.type === "custom" && e.customType === CUSTOM_TYPE && isSaveState(e.data)) {
+        latestForFile.set(e.data.file, e.data);
+      }
+    }
+
+    let bestState: SaveState | null = null;
+    let bestPos = -1;
+    for (const st of latestForFile.values()) {
+      if (!st.lastSavedEntryId) continue;
+      const p = pos.get(st.lastSavedEntryId);
+      if (p === undefined) continue;
+      if (p > bestPos) {
+        bestPos = p;
+        bestState = st;
+      }
+    }
+
+    const dir = targetDir(ctx);
+    if (bestState) {
+      const appendEntries = pathMessages.filter((e) => (pos.get(e.id) ?? -1) > bestPos);
+      debug(
+        "continuing branch file:",
+        bestState.file,
+        "saved-up-to:",
+        bestState.lastSavedEntryId,
+        "new entries:",
+        appendEntries.length,
+      );
+      return {
+        dir,
+        filename: bestState.file,
+        branchKey: bestState.branchKey,
+        fullCreate: false,
+        appendEntries,
+        pathMessages,
+        state: bestState,
+      };
+    }
+
+    const branchKey = pathMessages[pathMessages.length - 1].id;
+    const title = titleForFilename(ctx, firstUserText(pathMessages));
+    const filename = `${title}-${branchKey}-${fileTimestamp(new Date())}.md`;
+    debug("new branch file:", filename, "branchKey:", branchKey);
+    return {
+      dir,
+      filename,
+      branchKey,
+      fullCreate: true,
+      appendEntries: [],
+      pathMessages,
+      state: null,
+    };
+  }
+
+  // ---------- writing ----------
+
+  async function atomicWrite(file: string, content: string): Promise<void> {
+    const tmp = file + ".save-tmp";
+    await fs.writeFile(tmp, content, "utf-8");
+    await fs.rename(tmp, file);
+  }
+
+  function replaceFrontmatter(existing: string, fm: string): string {
+    if (/^---\r?\n[\s\S]*?\r?\n---\r?\n/.test(existing)) {
+      return existing.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, fm + "\n");
+    }
+    return `${fm}\n\n${existing}`;
+  }
+
+  async function saveConversation(ctx: ExtensionContext, plan: SavePlan): Promise<SaveResult> {
+    const filePath = path.join(plan.dir, plan.filename);
+    let fullCreate = plan.fullCreate;
+    if (!fullCreate) {
+      const exists = await fs
+        .access(filePath)
+        .then(() => true)
+        .catch(() => false);
+      if (!exists) {
+        debug("target file missing — recreating from full branch:", filePath);
+        fullCreate = true;
+      }
+    }
+
+    await fs.mkdir(plan.dir, { recursive: true });
+
+    if (fullCreate) {
+      const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined);
+      const body = renderEntries(plan.pathMessages);
+      const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}\n`;
+      await atomicWrite(filePath, content);
+      debug("created conversation file:", filePath);
+      return {
+        message: `saved ${plan.filename} (${plan.pathMessages.length} messages)`,
+        wrote: true,
+        created: true,
+        file: filePath,
+      };
+    }
+
+    if (plan.appendEntries.length === 0) {
+      debug("nothing new since last save:", plan.filename);
+      return {
+        message: `already up to date (${plan.filename})`,
+        wrote: false,
+        created: false,
+        file: filePath,
+      };
+    }
+
+    const existing = await fs.readFile(filePath, "utf-8");
+    const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, parseCreated(existing));
+    const appended = renderEntries(plan.appendEntries);
+    let updated = replaceFrontmatter(existing, frontmatter(meta));
+    if (!updated.endsWith("\n")) updated += "\n";
+    updated += `\n${appended}\n`;
+    await atomicWrite(filePath, updated);
+    debug("appended", plan.appendEntries.length, "entries to:", filePath);
+    return {
+      message: `appended ${plan.appendEntries.length} messages to ${plan.filename}`,
+      wrote: true,
+      created: false,
+      file: filePath,
+    };
+  }
+
+  function recordState(plan: SavePlan, leafId: string | null): void {
+    pi.appendEntry(CUSTOM_TYPE, {
+      branchKey: plan.branchKey,
+      lastSavedEntryId: leafId,
+      file: plan.filename,
+    });
+  }
+
+  function relativeForUser(ctx: ExtensionContext, file: string): string {
+    const rel = path.relative(ctx.cwd, file);
+    return rel && !rel.startsWith("..") ? rel : file;
+  }
+
+  // Serialize saves: agent_settled and the manual command must not interleave.
+  let chain: Promise<unknown> = Promise.resolve();
+  function schedule<T>(fn: () => Promise<T>): Promise<T> {
+    const run = chain.then(fn, fn);
+    chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /** Full save cycle: write the file, then persist the branch state entry. */
+  async function runSave(ctx: ExtensionContext): Promise<SaveResult> {
+    const plan = computePlan(ctx);
+    if (!plan) {
+      return {
+        message: "no conversation content to save yet",
+        wrote: false,
+        created: false,
+        file: null,
+      };
+    }
+    const result = await saveConversation(ctx, plan);
+    if (result.wrote) {
+      const leafId = ctx.sessionManager.getLeafId();
+      recordState(plan, leafId);
+      debug("recorded state entry — branchKey:", plan.branchKey, "leaf:", leafId);
+    }
+    return result;
+  }
+
+  // 1. Automatic: save after every settled agent turn.
+  pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+    debug("agent_settled — saving conversation");
+    try {
+      const r = await schedule(() => runSave(ctx));
+      if (r.wrote && r.created && ctx.hasUI && r.file) {
+        ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(ctx, r.file)}`, "info");
+      }
+    } catch (e) {
+      debug("auto-save failed:", String(e));
+      if (ctx.hasUI) ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
+    }
+  });
+
+  // 2. Manual: force a save now and report where it went.
+  pi.registerCommand(COMMAND, {
+    description:
+      "Save the current conversation branch to a markdown file now (auto-save-to-markdown)",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        debug("manual /" + COMMAND + " invoked");
+        const r = await schedule(() => runSave(ctx));
+        if (ctx.hasUI) {
+          const target = r.file ? relativeForUser(ctx, r.file) : "";
+          ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
+        }
+      } catch (e) {
+        debug("/" + COMMAND + " failed:", String(e));
+        if (ctx.hasUI) ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
+      }
+    },
+  });
+}

@@ -1,0 +1,61 @@
+{
+  "name": "@pi-claudian/auto-save-to-markdown",
+  "version": "0.1.0",
+  "description": "Pi extension that automatically saves each completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Licong Yang",
+    "email": "licong.yang@icloud.com",
+    "url": "https://github.com/licongy"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/licongy/pi-claudian.git",
+    "directory": "packages/auto-save-to-markdown"
+  },
+  "homepage": "https://github.com/licongy/pi-claudian/tree/master/packages/auto-save-to-markdown#readme",
+  "bugs": {
+    "url": "https://github.com/licongy/pi-claudian/issues"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "pi-claudian",
+    "markdown",
+    "conversation",
+    "session",
+    "export",
+    "auto-save",
+    "archive"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "debug.ts",
+    "README.md",
+    "README.zh.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.82.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.82.1",
+    "@types/node": "^22.10.0"
+  }
+}
