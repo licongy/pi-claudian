@@ -27,11 +27,14 @@
  * - Tool call/result folding: calls live in the assistant entry while their
  *   results are separate toolResult entries; saves pair them by toolCall id
  *   and fold each assistant block's calls, with a short result preview each,
- *   into one `<details><summary>Tool Calls</summary>` section. Previews stay
- *   short (500 chars): full content is one Obsidian link away, and oversized
- *   details bodies render unfolded in Obsidian. A result whose call was
- *   saved in an earlier file (mid-turn manual save) falls back to a
- *   standalone one-line block.
+ *   into one collapsed Obsidian callout (`> [!quote]- Tool Calls · …`).
+ *   Thinking folds the same way into `> [!tldr]- Thinking`. Callouts are used
+ *   instead of HTML `<details>` because Obsidian's views render embedded
+ *   markdown inside HTML blocks unreliably, while callouts fold and render
+ *   markdown in both Live Preview and Reading view. Outside Obsidian the
+ *   callouts degrade to plain blockquotes. A result whose call was saved in
+ *   an earlier file (mid-turn manual save) falls back to a standalone
+ *   one-line block.
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
@@ -333,21 +336,25 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Fold tool calls and their paired results into one collapsible section.
-   * Deliberately compact: Obsidian only collapses a details body it can
-   * render in view, so long previews make the section render unfolded.
+   * Collapsed Obsidian callout (`> [!type]- title`) wrapping a markdown body:
+   * every body line is prefixed with `>` (empty lines become bare `>`), so the
+   * body keeps rendering as markdown while folding works in both Obsidian
+   * views. Outside Obsidian the callout degrades to a plain blockquote.
    */
-  function renderToolCallsDetails(calls: RenderedToolCall[]): string {
+  function callout(type: string, title: string, body: string): string {
+    const lines = body.split("\n").map((line) => (line ? `> ${line}` : ">"));
+    return `> [!${type}]- ${title}\n${lines.join("\n")}`;
+  }
+
+  /** Fold tool calls and their paired results into one collapsed callout. */
+  function renderToolCallsCallout(calls: RenderedToolCall[]): string {
     const summary = summarizeToolNames(calls.map((c) => c.name));
     const items = calls.map((c) => {
       const head = c.args ? `**\`${c.name}\`** \`${c.args}\`` : `**\`${c.name}\`**`;
       const result = c.result === null ? "_(no result)_" : c.result || "_(empty result)_";
       return `${head}\n\n> ${result}`;
     });
-    return (
-      `<details>\n<summary>Tool Calls · ${calls.length} (${summary})</summary>\n\n` +
-      `${items.join("\n\n")}\n\n</details>`
-    );
+    return callout("quote", `Tool Calls · ${calls.length} (${summary})`, items.join("\n\n"));
   }
 
   function renderAssistant(
@@ -364,9 +371,7 @@ export default function (pi: ExtensionAPI) {
     const thinkings: string[] = [];
     const flushThinking = () => {
       if (thinkings.length) {
-        parts.push(
-          `<details>\n<summary>Thinking</summary>\n\n${thinkings.join("\n\n")}\n\n</details>`,
-        );
+        parts.push(callout("tldr", "Thinking", thinkings.join("\n\n")));
         thinkings.length = 0;
       }
     };
@@ -389,7 +394,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     flushThinking();
-    if (calls.length) parts.push(renderToolCallsDetails(calls));
+    if (calls.length) parts.push(renderToolCallsCallout(calls));
     if (m.errorMessage) parts.push(`> Error: ${m.errorMessage.replace(/\s+/g, " ").trim()}`);
     if (parts.length === 0) parts.push("_(empty response)_");
     return `${header}\n\n${parts.join("\n\n")}`;

@@ -78,12 +78,9 @@ auth 重构之后登录页一直重定向死循环……
 Assistant · 13:05:40 · claude-sonnet-4-5
 ===
 
-<details>
-<summary>Thinking</summary>
-
-先看中间件的执行顺序……
-
-</details>
+> [!tldr]- Thinking
+>
+> 先看中间件的执行顺序……
 
 我先追踪一下中间件链。
 
@@ -96,9 +93,12 @@ Assistant · 13:05:40 · claude-sonnet-4-5
 ---
 ```
 
-正文完整渲染 user / assistant 消息（assistant 的 thinking 放在可折叠的
-`<details>` 块中），每个工具调用和结果各压缩成一行摘要，既可读又能看出
-agent 做了什么。
+正文完整渲染 user / assistant 消息（assistant 的 thinking 与每轮工具调用
+分别折叠在可折叠的 Obsidian callout 中——`> [!tldr]- Thinking` 和
+`> [!quote]- Tool Calls · …`），每个工具调用和结果各压缩成一行摘要，既可读
+又能看出 agent 做了什么。之所以用 callout 而不是 HTML `<details>`，是因为
+Obsidian 对 HTML 块内嵌 Markdown 的渲染不可靠；在非 Obsidian 环境下 callout
+退化为普通引用块。
 
 每个消息块以 setext 一级信息头（`User · …`，下一行以 `===` 下划）开头——
 高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题区分

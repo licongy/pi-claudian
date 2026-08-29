@@ -88,12 +88,9 @@ The login page redirects in a loop after the auth refactor...
 Assistant · 13:05:40 · claude-sonnet-4-5
 ===
 
-<details>
-<summary>Thinking</summary>
-
-Let me check the redirect chain...
-
-</details>
+> [!tldr]- Thinking
+>
+> Let me check the redirect chain...
 
 I'll trace the middleware order first.
 
@@ -106,10 +103,13 @@ I'll trace the middleware order first.
 ---
 ```
 
-The body renders user and assistant messages in full (assistant thinking is
-kept in a collapsible `<details>` block) and summarizes each tool call and
-result in one line, so the file stays readable while still showing what the
-agent did.
+The body renders user and assistant messages in full (assistant thinking and
+per-turn tool calls are each folded into a collapsed Obsidian callout —
+`> [!tldr]- Thinking` and `> [!quote]- Tool Calls · …`) and summarizes each
+tool call and result in one line, so the file stays readable while still
+showing what the agent did. Callouts are used instead of HTML `<details>`
+because Obsidian renders markdown inside HTML blocks unreliably; outside
+Obsidian the callouts degrade to plain blockquotes.
 
 Each message block opens with a setext level-1 info header (`User · …`,
 underlined with `===`) — one level above the `##` headings AI content
