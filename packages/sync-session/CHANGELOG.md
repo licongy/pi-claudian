@@ -1,5 +1,11 @@
 # @pi-claudian/sync-session
 
+## 0.2.1
+
+### Patch Changes
+
+- 5668431: Treat explicit false tokens (empty, "0", "false", "no", "off", case-insensitive) as disabling `PI_CLAUDIAN_DEBUG`, instead of enabling it on any non-empty value. Previously `PI_CLAUDIAN_DEBUG=0` turned debug logging on, since environment variables are strings and `"0"` is truthy in JavaScript.
+
 ## 0.2.0
 
 ### Minor Changes
