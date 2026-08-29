@@ -84,11 +84,10 @@ Assistant · 13:05:40 · claude-sonnet-4-5
 
 我先追踪一下中间件链。
 
-**Tool calls**
-
-- `read` — {"filePath":"/Users/me/project/src/auth/middleware.ts"}
-
-> **Tool · read** /Users/me/project/src/auth/middleware.ts — 120 lines …
+> [!quote]- Tool Calls · 1 (read)
+> **`read`** `{"filePath":"/Users/me/project/src/auth/middleware.ts"}`
+>
+> > `import { NextResponse } from "next/server"; export function middleware(…) …`
 
 ---
 ```
@@ -98,7 +97,9 @@ Assistant · 13:05:40 · claude-sonnet-4-5
 `> [!quote]- Tool Calls · …`），每个工具调用和结果各压缩成一行摘要，既可读
 又能看出 agent 做了什么。之所以用 callout 而不是 HTML `<details>`，是因为
 Obsidian 对 HTML 块内嵌 Markdown 的渲染不可靠；在非 Obsidian 环境下 callout
-退化为普通引用块。
+退化为普通引用块。结果与参数预览会包在 inline code 里（分隔符长度会自动
+压过内容中的反引号序列），工具的原始输出因此按字面渲染，不会被当作
+Markdown 解析。
 
 每个消息块以 setext 一级信息头（`User · …`，下一行以 `===` 下划）开头——
 高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题区分

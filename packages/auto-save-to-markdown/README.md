@@ -94,11 +94,10 @@ Assistant · 13:05:40 · claude-sonnet-4-5
 
 I'll trace the middleware order first.
 
-**Tool calls**
-
-- `read` — {"filePath":"/Users/me/project/src/auth/middleware.ts"}
-
-> **Tool · read** /Users/me/project/src/auth/middleware.ts — 120 lines …
+> [!quote]- Tool Calls · 1 (read)
+> **`read`** `{"filePath":"/Users/me/project/src/auth/middleware.ts"}`
+>
+> > `import { NextResponse } from "next/server"; export function middleware(…) …`
 
 ---
 ```
@@ -109,7 +108,10 @@ per-turn tool calls are each folded into a collapsed Obsidian callout —
 tool call and result in one line, so the file stays readable while still
 showing what the agent did. Callouts are used instead of HTML `<details>`
 because Obsidian renders markdown inside HTML blocks unreliably; outside
-Obsidian the callouts degrade to plain blockquotes.
+Obsidian the callouts degrade to plain blockquotes. Result and argument
+previews are wrapped in inline code spans (with a delimiter sized to survive
+backticks inside the content), so raw tool output renders literally instead of
+being parsed as markdown.
 
 Each message block opens with a setext level-1 info header (`User · …`,
 underlined with `===`) — one level above the `##` headings AI content

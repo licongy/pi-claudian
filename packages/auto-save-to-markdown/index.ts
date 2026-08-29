@@ -32,7 +32,10 @@
  *   instead of HTML `<details>` because Obsidian's views render embedded
  *   markdown inside HTML blocks unreliably, while callouts fold and render
  *   markdown in both Live Preview and Reading view. Outside Obsidian the
- *   callouts degrade to plain blockquotes. A result whose call was saved in
+ *   callouts degrade to plain blockquotes. Argument previews and result
+ *   previews are wrapped in inline code spans (delimiter sized to survive
+ *   backticks inside the content), so raw output renders literally instead
+ *   of being parsed as markdown. A result whose call was saved in
  *   an earlier file (mid-turn manual save) falls back to a standalone
  *   one-line block.
  * - Branching: each file records exactly ONE branch (the root→leaf path
@@ -294,6 +297,19 @@ export default function (pi: ExtensionAPI) {
   // ---------- markdown rendering ----------
 
   /**
+   * Inline code span for arbitrary raw output (tool results, argument JSON):
+   * the delimiter is always one backtick longer than the longest backtick run
+   * inside the text, so content that itself contains backticks cannot break
+   * the span. Tool output renders literally instead of being parsed as
+   * markdown (headings, bold, wiki links …).
+   */
+  function inlineCode(text: string): string {
+    const longest = (text.match(/`+/g) ?? []).reduce((a, r) => Math.max(a, r.length), 0);
+    const fence = "`".repeat(longest + 1);
+    return `${fence}${text}${fence}`;
+  }
+
+  /**
    * Strip leading blank lines and trailing whitespace from a rendered block,
    * so joins and separators always keep exactly one blank line around them
    * no matter what blank lines the content itself starts or ends with.
@@ -325,7 +341,7 @@ export default function (pi: ExtensionAPI) {
 
   /** Standalone one-line block for a result whose call is not in this file. */
   function renderToolResult(m: ToolResultMessage): string {
-    return `> **Tool · ${m.toolName}** ${resultPreview(m)}`.trim();
+    return `> **Tool · ${m.toolName}** ${inlineCode(resultPreview(m))}`.trim();
   }
 
   /** "read, web_search ×2" — tool names with repeat counts, first-seen order. */
@@ -346,12 +362,17 @@ export default function (pi: ExtensionAPI) {
     return `> [!${type}]- ${title}\n${lines.join("\n")}`;
   }
 
-  /** Fold tool calls and their paired results into one collapsed callout. */
+  /**
+   * Fold tool calls and their paired results into one collapsed callout.
+   * Argument JSON and result previews are wrapped in inline code spans, so
+   * raw output renders literally instead of being parsed as markdown.
+   */
   function renderToolCallsCallout(calls: RenderedToolCall[]): string {
     const summary = summarizeToolNames(calls.map((c) => c.name));
     const items = calls.map((c) => {
-      const head = c.args ? `**\`${c.name}\`** \`${c.args}\`` : `**\`${c.name}\`**`;
-      const result = c.result === null ? "_(no result)_" : c.result || "_(empty result)_";
+      const head = c.args ? `**\`${c.name}\`** ${inlineCode(c.args)}` : `**\`${c.name}\`**`;
+      const result =
+        c.result === null ? "_(no result)_" : inlineCode(c.result || "_(empty result)_");
       return `${head}\n\n> ${result}`;
     });
     return callout("quote", `Tool Calls · ${calls.length} (${summary})`, items.join("\n\n"));
