@@ -10,7 +10,7 @@
 
 - [ ] `pnpm typecheck` passes
 - [ ] `pnpm lint` passes (or `pnpm format` was run)
-- [ ] A [changeset](https://github.com/licongy/pi-claudian/blob/master/CONTRIBUTING.md#releases) was added for user-facing changes (`pnpm changeset`)
+- [ ] A [changeset](https://github.com/licongy/pi-claudian/blob/master/CONTRIBUTING.md#releases) was added for user-facing changes (`pnpm run changeset`)
 - [ ] README / docs updated if behavior changed
 - [ ] For a new package: `pi.extensions` points at `.ts` source, includes the `pi-package` keyword, and has an entry in the root README Extensions table
 

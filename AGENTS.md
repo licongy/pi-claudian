@@ -17,9 +17,11 @@ Run from the repo root:
 - `pnpm typecheck` — type-check all packages (`tsc --noEmit`)
 - `pnpm lint` — `prettier --check .`
 - `pnpm format` — `prettier --write .`
-- `pnpm changeset` — add a changeset describing a change
-- `pnpm version` — apply changesets, bump versions, update CHANGELOGs
-- `pnpm release` — publish all changed packages to npm
+- `pnpm run changeset` — add a changeset describing a change
+- `pnpm run version` — apply changesets, bump versions, update CHANGELOGs
+  (always with `run`: bare `pnpm version` is pnpm's built-in version command,
+  which shadows this script and never consumes changesets)
+- `pnpm run release` — publish all changed packages to npm
 
 Per-package equivalents exist (e.g. `pnpm --filter @pi-claudian/sync-title typecheck`).
 
@@ -67,10 +69,12 @@ deliver what was asked, then stop.
 
 ## Releases
 
-Uses Changesets. Add a changeset (`pnpm changeset`) for any user-facing change,
-then `pnpm version` and `pnpm release`. Each package versions independently.
+Uses Changesets. Add a changeset (`pnpm run changeset`) for any user-facing
+change, then `pnpm run version` and `pnpm run release`. Each package versions
+independently.
 
-Both `pnpm version` and `pnpm release` run `scripts/check-clean.mjs` and abort
-on a dirty working tree: `pnpm version` forces committing source + the changeset
-before bumping, and `pnpm release` forces committing the version bump before
-publishing so the release's git tag points at the published code.
+Both `pnpm run version` and `pnpm run release` run `scripts/check-clean.mjs`
+and abort on a dirty working tree: `pnpm run version` forces committing
+source + the changeset before bumping, and `pnpm run release` forces
+committing the version bump before publishing so the release's git tag
+points at the published code.

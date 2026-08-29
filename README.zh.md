@@ -51,21 +51,21 @@ PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # 捕获到文件
 管理与发布。
 
 ```sh
-pnpm changeset    # 描述一次变更（生成一个 changeset 文件）
-pnpm version      # 应用 changesets -> 升级版本、更新 CHANGELOG
-pnpm release      # 发布所有有变更的包到 npm
+pnpm run changeset  # 描述一次变更（生成一个 changeset 文件）
+pnpm run version    # 应用 changesets -> 升级版本、更新 CHANGELOG
+pnpm run release    # 发布所有有变更的包到 npm
 ```
 
 详见 [`.changeset/README.md`](.changeset/README.md)。
 
-> `pnpm version` 与 `pnpm release` 均要求工作区是干净的
+> `pnpm run version` 与 `pnpm run release` 均要求工作区是干净的
 > （`scripts/check-clean.mjs`）。这能避免从一个发布标签所不指向的状态进行发布——最常见的
 > 原因是在版本化前忘记提交源码/changeset 文件，或在发布前忘记提交版本升级。典型流程：
 >
 > ```sh
-> pnpm changeset && git add -A && git commit -m "add changeset"  # 提交变更 + changeset
-> pnpm version && git add -A && git commit -m "version packages"  # 提交版本升级
-> pnpm release                                                   # 干净工作区 -> 标签落在已发布代码上
+> pnpm run changeset && git add -A && git commit -m "add changeset"   # 提交变更 + changeset
+> pnpm run version && git add -A && git commit -m "version packages"  # 提交版本升级
+> pnpm run release                                                    # 干净工作区 -> 标签落在已发布代码上
 > ```
 
 ## 贡献

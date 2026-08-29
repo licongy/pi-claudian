@@ -82,12 +82,12 @@ Releases are managed with [Changesets](https://github.com/changesets/changesets)
 For any user-facing change, add a changeset from the repo root:
 
 ```sh
-pnpm changeset
+pnpm run changeset
 ```
 
 Commit the generated changeset file alongside your code. A maintainer will run
-`pnpm version` and `pnpm release` to publish. You do **not** need to publish
-yourself.
+`pnpm run version` and `pnpm run release` to publish. You do **not** need to
+publish yourself.
 
 ## Reporting bugs & requesting features
 

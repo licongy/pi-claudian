@@ -50,23 +50,23 @@ PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
 This repo uses [Changesets](https://github.com/changesets/changesets) for independent versioning and publishing of each extension.
 
 ```sh
-pnpm changeset    # describe a change (creates a changeset file)
-pnpm version      # apply changesets -> bump versions, update CHANGELOGs
-pnpm release      # publish all changed packages to npm
+pnpm run changeset  # describe a change (creates a changeset file)
+pnpm run version    # apply changesets -> bump versions, update CHANGELOGs
+pnpm run release    # publish all changed packages to npm
 ```
 
 See [`.changeset/README.md`](.changeset/README.md) for details.
 
-> Both `pnpm version` and `pnpm release` require a clean working tree
+> Both `pnpm run version` and `pnpm run release` require a clean working tree
 > (`scripts/check-clean.mjs`). This prevents publishing from a state that the
 > release's git tag does not point at — the most common cause is forgetting to
 > commit source/changeset files before versioning, or the version bump before
 > publishing. Typical flow:
 >
 > ```sh
-> pnpm changeset && git add -A && git commit -m "add changeset"  # commit the change + changeset
-> pnpm version && git add -A && git commit -m "version packages"  # commit the version bump
-> pnpm release                                                   # clean tree -> tag lands on the published code
+> pnpm run changeset && git add -A && git commit -m "add changeset"   # commit the change + changeset
+> pnpm run version && git add -A && git commit -m "version packages"  # commit the version bump
+> pnpm run release                                                    # clean tree -> tag lands on the published code
 > ```
 
 ## Contributing

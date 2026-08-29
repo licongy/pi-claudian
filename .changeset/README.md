@@ -9,7 +9,7 @@ to version and publish each package independently.
 Run this from the repo root and follow the prompts:
 
 ```sh
-pnpm changeset
+pnpm run changeset
 ```
 
 This will create a new markdown file in this folder describing the change and
@@ -18,9 +18,12 @@ the packages + semver bump it implies. Commit that file alongside your code.
 ## Consuming changesets
 
 ```sh
-pnpm version   # apply pending changesets, bump versions, update CHANGELOGs
-pnpm release   # build all packages and publish to npm
+pnpm run version      # apply pending changesets, bump versions, update CHANGELOGs
+pnpm run release      # build all packages and publish to npm
 ```
+
+The `run` is required: a bare `pnpm version` runs pnpm's built-in `version`
+command instead of this repo's script, so pending changesets are never consumed.
 
 Each package in `packages/*` is published separately so users can install a
 single extension via `pi install npm:<package-name>`.

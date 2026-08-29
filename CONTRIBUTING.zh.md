@@ -79,11 +79,11 @@ PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # 捕获到文件
 都从仓库根目录添加一个 changeset：
 
 ```sh
-pnpm changeset
+pnpm run changeset
 ```
 
-将生成的 changeset 文件与你的代码一起提交。维护者会运行 `pnpm version` 与
-`pnpm release` 来发布。你**无需**自行发布。
+将生成的 changeset 文件与你的代码一起提交。维护者会运行 `pnpm run version`
+与 `pnpm run release` 来发布。你**无需**自行发布。
 
 ## 报告 bug 与提需求
 
