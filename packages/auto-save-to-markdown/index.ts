@@ -24,6 +24,14 @@
  *   (`User · HH:MM:SS` / `Assistant · HH:MM:SS · model`, underlined with
  *   `===`, distinct from the `#`/`##` ATX headings AI content uses) and
  *   ends with a `---` separator wrapped in single blank lines.
+ * - Tool call/result folding: calls live in the assistant entry while their
+ *   results are separate toolResult entries; saves pair them by toolCall id
+ *   and fold each assistant block's calls, with a short result preview each,
+ *   into one `<details><summary>Tool Calls</summary>` section. Previews stay
+ *   short (500 chars): full content is one Obsidian link away, and oversized
+ *   details bodies render unfolded in Obsidian. A result whose call was
+ *   saved in an earlier file (mid-turn manual save) falls back to a
+ *   standalone one-line block.
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
@@ -70,7 +78,7 @@ const NOTIFY_TAG = "[AutoSave]";
 
 const MAX_TITLE_LENGTH = 60;
 const TITLE_FALLBACK_LENGTH = 40;
-const TOOL_RESULT_PREVIEW = 300;
+const TOOL_RESULT_PREVIEW = 500;
 const TOOL_ARGS_PREVIEW = 160;
 
 type AgentMessage = SessionMessageEntry["message"];
@@ -291,7 +299,62 @@ export default function (pi: ExtensionAPI) {
     return s.replace(/^(?:[ \t]*\n)+/, "").replace(/\s+$/, "");
   }
 
-  function renderAssistant(m: AssistantMessage, t: string): string {
+  /** One tool call with its paired result preview (null when no result entry exists). */
+  interface RenderedToolCall {
+    name: string;
+    args: string;
+    result: string | null;
+  }
+
+  /** Flattened, length-capped result preview with error status suffix. */
+  function resultPreview(m: ToolResultMessage): string {
+    const texts: string[] = [];
+    for (const b of m.content) {
+      if (b.type === "text") texts.push(b.text);
+      else texts.push(`_[image: ${b.mimeType}]_`);
+    }
+    const flat = texts.join(" ").replace(/\s+/g, " ").trim();
+    const capped =
+      flat.length > TOOL_RESULT_PREVIEW ? flat.slice(0, TOOL_RESULT_PREVIEW) + " …" : flat;
+    const status = m.isError ? " (error)" : "";
+    return `${capped}${status}`.trim();
+  }
+
+  /** Standalone one-line block for a result whose call is not in this file. */
+  function renderToolResult(m: ToolResultMessage): string {
+    return `> **Tool · ${m.toolName}** ${resultPreview(m)}`.trim();
+  }
+
+  /** "read, web_search ×2" — tool names with repeat counts, first-seen order. */
+  function summarizeToolNames(names: string[]): string {
+    const counts = new Map<string, number>();
+    for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+    return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(", ");
+  }
+
+  /**
+   * Fold tool calls and their paired results into one collapsible section.
+   * Deliberately compact: Obsidian only collapses a details body it can
+   * render in view, so long previews make the section render unfolded.
+   */
+  function renderToolCallsDetails(calls: RenderedToolCall[]): string {
+    const summary = summarizeToolNames(calls.map((c) => c.name));
+    const items = calls.map((c) => {
+      const head = c.args ? `**\`${c.name}\`** \`${c.args}\`` : `**\`${c.name}\`**`;
+      const result = c.result === null ? "_(no result)_" : c.result || "_(empty result)_";
+      return `${head}\n\n> ${result}`;
+    });
+    return (
+      `<details>\n<summary>Tool Calls · ${calls.length} (${summary})</summary>\n\n` +
+      `${items.join("\n\n")}\n\n</details>`
+    );
+  }
+
+  function renderAssistant(
+    m: AssistantMessage,
+    t: string,
+    results: Map<string, ToolResultMessage>,
+  ): string {
     // Render blocks in their original chronological order: thinking always
     // precedes the text it produced, instead of being grouped after the fact.
     // Setext H1 (`===` underline): one level above the `##` headings AI
@@ -307,7 +370,7 @@ export default function (pi: ExtensionAPI) {
         thinkings.length = 0;
       }
     };
-    const calls: string[] = [];
+    const calls: RenderedToolCall[] = [];
     for (const b of m.content) {
       if (b.type === "text") {
         flushThinking();
@@ -316,32 +379,34 @@ export default function (pi: ExtensionAPI) {
         thinkings.push(repairThinking(b.thinking));
       } else if (b.type === "toolCall") {
         flushThinking();
-        calls.push(`- \`${b.name}\` — ${previewArgs(b.arguments)}`);
+        const r = results.get(b.id);
+        results.delete(b.id);
+        calls.push({
+          name: b.name,
+          args: previewArgs(b.arguments),
+          result: r ? resultPreview(r) : null,
+        });
       }
     }
     flushThinking();
-    if (calls.length) parts.push(`**Tool calls**\n\n${calls.join("\n")}`);
+    if (calls.length) parts.push(renderToolCallsDetails(calls));
     if (m.errorMessage) parts.push(`> Error: ${m.errorMessage.replace(/\s+/g, " ").trim()}`);
     if (parts.length === 0) parts.push("_(empty response)_");
     return `${header}\n\n${parts.join("\n\n")}`;
   }
 
-  function renderToolResult(m: ToolResultMessage): string {
-    const texts: string[] = [];
-    for (const b of m.content) {
-      if (b.type === "text") texts.push(b.text);
-      else texts.push(`_[image: ${b.mimeType}]_`);
-    }
-    const flat = texts.join(" ").replace(/\s+/g, " ").trim();
-    const capped =
-      flat.length > TOOL_RESULT_PREVIEW ? flat.slice(0, TOOL_RESULT_PREVIEW) + " …" : flat;
-    const status = m.isError ? " (error)" : "";
-    const line = `> **Tool · ${m.toolName}${status}** ${capped}`.trim();
-    return line;
-  }
-
   /** Render a chronological list of message entries as markdown blocks. */
   function renderEntries(entries: SessionMessageEntry[]): string {
+    // Tool calls sit in assistant entries while their results are separate
+    // toolResult entries, paired by toolCall id. Collect results first so
+    // each assistant block can fold its calls together with their results;
+    // results left unclaimed (their call was saved in an earlier file, e.g.
+    // a mid-turn manual save) render as standalone blocks.
+    const results = new Map<string, ToolResultMessage>();
+    for (const e of entries) {
+      if (e.message.role === "toolResult") results.set(e.message.toolCallId, e.message);
+    }
+
     const blocks: string[] = [];
     for (const e of entries) {
       const m = e.message;
@@ -349,8 +414,11 @@ export default function (pi: ExtensionAPI) {
       if (m.role === "user") {
         blocks.push(`User · ${t}\n===\n\n${userText(m.content)}`);
       } else if (m.role === "assistant") {
-        blocks.push(renderAssistant(m, t));
+        blocks.push(renderAssistant(m, t, results));
       } else if (m.role === "toolResult") {
+        // Claimed results (deleted from the map by their assistant block)
+        // were already folded inline; the rest have no call in this file.
+        if (!results.has(m.toolCallId)) continue;
         blocks.push(renderToolResult(m));
       }
       // Other roles (custom, bashExecution, branchSummary, compactionSummary)
