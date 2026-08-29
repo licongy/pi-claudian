@@ -1,3 +1,4 @@
+---
 "@pi-claudian/sync-title": patch
 ---
 

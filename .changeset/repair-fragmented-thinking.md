@@ -1,3 +1,4 @@
+---
 "@pi-claudian/auto-save-to-markdown": patch
 ---
 
