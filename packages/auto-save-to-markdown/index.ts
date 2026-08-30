@@ -1,5 +1,5 @@
 /**
- * @pi-claudian/auto-save-to-markdown
+ * auto-save-to-markdown
  *
  * Automatically saves the current conversation to a markdown file after every
  * completed agent turn, with session metadata in a YAML frontmatter block.
@@ -50,6 +50,15 @@
  *   (e.g. /tree navigation followed by a new prompt), no file matches and a
  *   new file is created with the full current branch. Continuing an existing
  *   branch appends only the messages that are new since the last save.
+ * - Recovery: a continuation is only kept when the target file exists AND
+ *   its frontmatter `messages` count covers the messages already saved for
+ *   this branch (a count that exceeds it is fine — a descendant branch
+ *   extended the same file). If the file was deleted, or was rewritten from
+ *   a different tree position (e.g. /tree navigation plus a save on an older
+ *   branch), appending or recreating in place could silently strand this
+ *   branch's newer messages — so a brand-new file with the full current
+ *   branch is written instead. Every branch therefore always ends up with a
+ *   complete, consistent file.
  * - Compaction: files archive the ORIGINAL messages (getBranch() returns the
  *   raw tree path, not the compaction-aware context), so a compacted session
  *   still exports its complete history.
@@ -61,7 +70,7 @@
  * and reports the file path.
  *
  * Installation:
- *   pi install npm:@pi-claudian/auto-save-to-markdown
+ *   pi install npm:auto-save-to-markdown
  *
  * Debug:
  *   PI_CLAUDIAN_DEBUG=1 pi
@@ -512,6 +521,12 @@ export default function (pi: ExtensionAPI) {
     return lines.join("\n");
   }
 
+  /** Recover the `messages` count from an existing frontmatter block. */
+  function parseMessageCount(content: string): number | null {
+    const m = content.match(/^messages: (\d+)$/m);
+    return m ? Number(m[1]) : null;
+  }
+
   /** Recover the original creation timestamp from an existing frontmatter block. */
   function parseCreated(content: string): string | undefined {
     const m = content.match(/^created: "(.*)"$/m);
@@ -588,6 +603,27 @@ export default function (pi: ExtensionAPI) {
     return e.type === "message";
   }
 
+  /** Brand-new file plan for the current branch (new branch, or recovery). */
+  function freshFilePlan(
+    ctx: ExtensionContext,
+    dir: string,
+    pathMessages: SessionMessageEntry[],
+  ): SavePlan {
+    const branchKey = pathMessages[pathMessages.length - 1].id;
+    const title = titleForFilename(ctx, firstUserText(pathMessages));
+    const filename = `${title}-${branchKey}-${fileTimestamp(new Date())}.md`;
+    debug("new branch file:", filename, "branchKey:", branchKey);
+    return {
+      dir,
+      filename,
+      branchKey,
+      fullCreate: true,
+      appendEntries: [],
+      pathMessages,
+      state: null,
+    };
+  }
+
   /**
    * Decide which file the current branch belongs to and what to write.
    *
@@ -597,6 +633,10 @@ export default function (pi: ExtensionAPI) {
    * or /fork. The file to continue is the one whose most recent saved position
    * is the deepest entry still on the current root→leaf path; when the tree
    * moved (navigation + re-ask), no position matches and a new file starts.
+   *
+   * ALL recorded states are considered when picking that position — keeping
+   * only the latest state per file could shadow an on-path state with one
+   * recorded on a different branch, forcing needless new files.
    */
   function computePlan(ctx: ExtensionContext): SavePlan | null {
     const pathEntries = ctx.sessionManager.getBranch();
@@ -606,23 +646,16 @@ export default function (pi: ExtensionAPI) {
     const pos = new Map<string, number>();
     pathEntries.forEach((e, i) => pos.set(e.id, i));
 
-    const latestForFile = new Map<string, SaveState>();
-    for (const e of ctx.sessionManager.getEntries()) {
-      if (e.type === "custom" && e.customType === CUSTOM_TYPE && isSaveState(e.data)) {
-        latestForFile.set(e.data.file, e.data);
-      }
-    }
-
     let bestState: SaveState | null = null;
     let bestPos = -1;
-    for (const st of latestForFile.values()) {
+    for (const e of ctx.sessionManager.getEntries()) {
+      if (e.type !== "custom" || e.customType !== CUSTOM_TYPE || !isSaveState(e.data)) continue;
+      const st = e.data;
       if (!st.lastSavedEntryId) continue;
       const p = pos.get(st.lastSavedEntryId);
-      if (p === undefined) continue;
-      if (p > bestPos) {
-        bestPos = p;
-        bestState = st;
-      }
+      if (p === undefined || p <= bestPos) continue;
+      bestPos = p;
+      bestState = st;
     }
 
     const dir = targetDir(ctx);
@@ -647,19 +680,7 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    const branchKey = pathMessages[pathMessages.length - 1].id;
-    const title = titleForFilename(ctx, firstUserText(pathMessages));
-    const filename = `${title}-${branchKey}-${fileTimestamp(new Date())}.md`;
-    debug("new branch file:", filename, "branchKey:", branchKey);
-    return {
-      dir,
-      filename,
-      branchKey,
-      fullCreate: true,
-      appendEntries: [],
-      pathMessages,
-      state: null,
-    };
+    return freshFilePlan(ctx, dir, pathMessages);
   }
 
   // ---------- writing ----------
@@ -677,23 +698,55 @@ export default function (pi: ExtensionAPI) {
     return `${fm}\n\n${existing}`;
   }
 
+  /**
+   * Verify a continuation plan against the file on disk. A continuation is
+   * only kept when the target file exists AND its frontmatter `messages`
+   * count matches the messages already saved for this branch (path messages
+   * minus the ones about to be appended). Otherwise the file was removed, or
+   * holds a different branch's snapshot (e.g. it was recreated from an older
+   * tree position after /tree navigation) — continuing or recreating it in
+   * place could silently strand this branch's newer messages, so a brand-new
+   * file with the full current branch is written instead.
+   */
+  async function resolvePlan(ctx: ExtensionContext, plan: SavePlan): Promise<SavePlan> {
+    if (plan.fullCreate) return plan;
+    const filePath = path.join(plan.dir, plan.filename);
+    const exists = await fs
+      .access(filePath)
+      .then(() => true)
+      .catch(() => false);
+    if (!exists) {
+      debug("continuation target missing — starting a fresh file:", plan.filename);
+      return freshFilePlan(ctx, plan.dir, plan.pathMessages);
+    }
+    const existing = await fs.readFile(filePath, "utf-8");
+    const saved = parseMessageCount(existing);
+    const expected = plan.pathMessages.length - plan.appendEntries.length;
+    // The file holds this branch's prefix plus possibly a descendant branch's
+    // extra messages (saved > expected with nothing new to append): that is
+    // fine to keep. Missing messages (saved < expected, or none readable),
+    // or extra messages that new appends would interleave with, are not —
+    // both would silently strand messages, so start a fresh file instead.
+    if (saved === null || saved < expected || (saved > expected && plan.appendEntries.length > 0)) {
+      debug(
+        "continuation target out of sync (messages:",
+        saved,
+        "expected:",
+        expected,
+        ") — starting a fresh file:",
+        plan.filename,
+      );
+      return freshFilePlan(ctx, plan.dir, plan.pathMessages);
+    }
+    return plan;
+  }
+
   async function saveConversation(ctx: ExtensionContext, plan: SavePlan): Promise<SaveResult> {
     const filePath = path.join(plan.dir, plan.filename);
-    let fullCreate = plan.fullCreate;
-    if (!fullCreate) {
-      const exists = await fs
-        .access(filePath)
-        .then(() => true)
-        .catch(() => false);
-      if (!exists) {
-        debug("target file missing — recreating from full branch:", filePath);
-        fullCreate = true;
-      }
-    }
 
     await fs.mkdir(plan.dir, { recursive: true });
 
-    if (fullCreate) {
+    if (plan.fullCreate) {
       const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined);
       const body = renderEntries(plan.pathMessages); // ends with the trailing separator
       const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
@@ -764,7 +817,7 @@ export default function (pi: ExtensionAPI) {
 
   /** Full save cycle: write the file, then persist the branch state entry. */
   async function runSave(ctx: ExtensionContext): Promise<SaveResult> {
-    const plan = computePlan(ctx);
+    let plan = computePlan(ctx);
     if (!plan) {
       return {
         message: "no conversation content to save yet",
@@ -773,6 +826,7 @@ export default function (pi: ExtensionAPI) {
         file: null,
       };
     }
+    plan = await resolvePlan(ctx, plan);
     const result = await saveConversation(ctx, plan);
     if (result.wrote) {
       const leafId = ctx.sessionManager.getLeafId();

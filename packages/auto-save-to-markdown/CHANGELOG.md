@@ -1,4 +1,4 @@
-# @pi-claudian/auto-save-to-markdown
+# auto-save-to-markdown
 
 ## 0.3.3
 

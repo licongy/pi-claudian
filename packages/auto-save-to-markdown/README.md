@@ -1,6 +1,6 @@
-# @pi-claudian/auto-save-to-markdown
+# auto-save-to-markdown
 
-[![npm version](https://img.shields.io/npm/v/@pi-claudian/auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/@pi-claudian/auto-save-to-markdown)
+[![npm version](https://img.shields.io/npm/v/auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/auto-save-to-markdown)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [English](README.md) | [中文](README.zh.md)
@@ -20,7 +20,7 @@ model, cost, tokens, and session metadata right in the frontmatter.
 ## Installation
 
 ```
-pi install npm:@pi-claudian/auto-save-to-markdown
+pi install npm:auto-save-to-markdown
 ```
 
 ## Usage
@@ -158,6 +158,14 @@ root-to-leaf path that branch sees.
 Branch identity is persisted inside the session tree itself via extension
 custom entries (never sent to the LLM, not rendered in the TUI), so state
 survives restarts and navigation without any sidecar files.
+
+A continuation is only kept when its file exists and its frontmatter
+`messages` count covers the branch position (a higher count is fine — a
+descendant branch extended the same file). If the file was deleted, or was
+rewritten from a different tree position (e.g. a save on an older branch after
+`/tree` navigation), continuing it could silently strand the newer branch's
+messages — so a **fresh file with the full current branch** is written instead.
+Every branch therefore always ends up with a complete, consistent file.
 
 Compacted sessions still export their **full original history** — the archive
 always contains the complete conversation, not the compacted context.

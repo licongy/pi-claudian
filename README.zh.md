@@ -18,11 +18,11 @@ pi install npm:<package-name>
 
 ## 扩展
 
-| 包                                                                     | 描述                                                                                   |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [`@pi-claudian/sync-title`](packages/sync-title)                       | 将 Claudian 的会话标题同步到 Pi 的会话名称中，使其出现在 `/resume` 里。                |
-| [`@pi-claudian/sync-session`](packages/sync-session)                   | 将 Pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。         |
-| [`@pi-claudian/auto-save-to-markdown`](packages/auto-save-to-markdown) | 每轮对话完成后自动保存为带 YAML frontmatter 的 markdown 文件，每个会话树分支一个文件。 |
+| 包                                                        | 描述                                                                                                                         |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [`@pi-claudian/sync-title`](packages/sync-title)          | 将 Claudian 的会话标题同步到 Pi 的会话名称中，使其出现在 `/resume` 里。                                                      |
+| [`@pi-claudian/sync-session`](packages/sync-session)      | 将 Pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。                                               |
+| [`auto-save-to-markdown`](packages/auto-save-to-markdown) | 每轮对话完成后自动保存为带 YAML frontmatter 的 markdown 文件，每个会话树分支一个文件。与 Claudian 无关，适用于任何 Pi 会话。 |
 
 ## 开发
 

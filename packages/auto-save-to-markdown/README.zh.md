@@ -1,6 +1,6 @@
-# @pi-claudian/auto-save-to-markdown
+# auto-save-to-markdown
 
-[![npm version](https://img.shields.io/npm/v/@pi-claudian/auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/@pi-claudian/auto-save-to-markdown)
+[![npm version](https://img.shields.io/npm/v/auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/auto-save-to-markdown)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [English](README.md) | [中文](README.zh.md)
@@ -14,7 +14,7 @@ Pi 内部以 JSONL 树的形式记录会话，便于恢复却不便于阅读、�
 ## 安装
 
 ```
-pi install npm:@pi-claudian/auto-save-to-markdown
+pi install npm:auto-save-to-markdown
 ```
 
 ## 用法
@@ -136,6 +136,12 @@ markdown 文件只记录**一个分支**——即该分支看到的 root→leaf 
 
 分支状态以扩展 custom entry 的形式持久化在会话树内部（不进 LLM 上下文、
 不在 TUI 渲染），因此无需任何辅助文件即可在重启和导航后恢复状态。
+
+只有当目标文件存在、且 frontmatter 的 `messages` 数覆盖当前分支位置时
+（数值更大也没问题——那是子分支沿同一文件继续追加过），才会继续沿用该文件。
+若文件被删除，或曾被另一个树位置改写（例如 `/tree` 导航后在旧分支上保存过），
+继续沿用就可能把新分支的消息悄悄丢掉——此时会**以当前分支的完整内容另存新
+文件**，保证每个分支最终都有一个完整、一致的文件。
 
 被压缩（compaction）过的会话导出的仍是**完整原始历史**——归档永远是全量
 对话，而不是压缩后的上下文。
