@@ -31,6 +31,27 @@ conversation branch is written to `<cwd>/<folder>/<title>-<key>-<time>.md`.
 Manual: run `/save-conversation` to save the current branch immediately and
 report the file path.
 
+Batch: run `/save-conversation-all` to save **every session of the current
+project** — every session jsonl in the project's
+`~/.pi/agent/sessions/<encoded-cwd>/` folder. Each session goes through the
+exact same pipeline as the live one (candidate chain, never-overwrite guard,
+rename-on-title, recovery warnings), and its archive is written under that
+session's own working directory, exactly as if `/save-conversation` had been
+run inside it. The current session saves first through the normal live path.
+Details:
+
+- **Idempotent.** Re-running continues or reports "up to date" per session;
+  it never re-creates files.
+- **Skips** sessions without an assistant reply (nothing conversational to
+  archive) and pre-`id/parentId`-era legacy files.
+- **Defers** a session whose jsonl changed while it was being processed (its
+  runtime is still writing it): the save only proceeds when the file is
+  verified unchanged since it was read. Deferred sessions are continued by
+  their own runtime or by the next batch run.
+- **Reports** a summary — `N saved, M up to date, K skipped, …` — with
+  per-session warnings for anything anomalous (each tagged with the first 8
+  chars of its session id).
+
 ## Configuration
 
 The target folder is controlled by the `PI_SAVE_CONVERSATION_DIR` environment

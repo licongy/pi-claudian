@@ -114,8 +114,23 @@
  *   newline-fragmentation corruption (one word per line) are detected and
  *   re-joined into flowing text before saving; clean thinking is untouched.
  *
- * Manual command: `/save-conversation` saves the current branch immediately
- * and reports the file path.
+ * Manual commands:
+ * - `/save-conversation` saves the current branch immediately and reports
+ *   the file path.
+ * - `/save-conversation-all` saves EVERY session of the current project
+ *   (every session jsonl in the project's `~/.pi/agent/sessions` folder):
+ *   each session through the exact same pipeline — state candidates, the
+ *   never-overwrite guard, rename-on-title, recovery warnings — with its
+ *   archive written under that session's own working directory. Sessions
+ *   without an assistant reply are skipped; the current session saves
+ *   through the normal live path first. Idempotent: re-running continues
+ *   or reports "up to date" per session, never re-creating files. A session
+ *   whose jsonl changes while it is being processed (it is still being
+ *   written by its own runtime) is deferred to the next run instead of
+ *   racing the other writer — the save only proceeds when the file is
+ *   verified unchanged since it was read (optimistic concurrency control;
+ *   the state line the batch appends to a foreign session jsonl is
+ *   byte-identical to what pi's own appendCustomEntry would write).
  *
  * Installation:
  *   pi install npm:pi-auto-save-to-markdown
@@ -132,9 +147,10 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { debug } from "./debug.js";
 
@@ -142,6 +158,7 @@ const CUSTOM_TYPE = "pi-claudian-auto-save-markdown";
 const ENV_SUBDIR = "PI_SAVE_CONVERSATION_DIR";
 const DEFAULT_SUBDIR = "ai-conversations";
 const COMMAND = "save-conversation";
+const COMMAND_ALL = "save-conversation-all";
 const NOTIFY_TAG = "[AutoSave]";
 /**
  * Generator identity recorded in the frontmatter. This extension only ever
@@ -268,6 +285,62 @@ function isSaveState(v: unknown): v is SaveState {
   );
 }
 
+/**
+ * The save pipeline's complete view of a session: the narrow surface it needs
+ * from the host, so the exact same pipeline code runs for the live session
+ * (backed by the real ExtensionContext and pi.appendEntry) and for any other
+ * session of the project (backed by DiskSessionView, rebuilt from the session
+ * jsonl on disk, with state entries appended directly). The interface is a
+ * structural subset of pi's ExtensionContext/SessionManager, so the live
+ * adapter passes the real objects through unchanged — the batch feature is
+ * pure parameterization, byte-identical on the live path.
+ */
+interface SaveContext {
+  /** Working directory of the session — resolves the archive folder. */
+  readonly cwd: string;
+  /** Whether a UI surface exists; notify() is a no-op without one. */
+  readonly hasUI: boolean;
+  /** Fire-and-forget notification, guarded by hasUI. */
+  notify(message: string, level: "info" | "warning" | "error"): void;
+  /** Read-only session surface (structural subset of pi's SessionManager). */
+  readonly session: {
+    getBranch(): SessionEntry[];
+    getEntries(): SessionEntry[];
+    getSessionId(): string;
+    getSessionFile(): string | undefined;
+    getSessionName(): string | undefined;
+    getLeafId(): string | null;
+  };
+  /**
+   * Save-state discovery: disk-first for the live session; for disk views,
+   * the states parsed from the load snapshot — a fresh re-read could see
+   * entries newer than the frozen snapshot the save is based on, and
+   * consistency beats freshness.
+   */
+  readSaveStates(): Promise<SaveState[] | null>;
+  /** Warn about a state entry written by a newer schema — once per session. */
+  warnMixedVersion(state: SaveState): void;
+  /**
+   * Concurrency guard before this save's first write. No-op for the live
+   * session (its writes are serialized through pi in-process). A disk view
+   * verifies its jsonl is unchanged since load (optimistic concurrency
+   * control — the file only ever grows, so the size at load is the version
+   * token) and throws SessionChangedError when another writer got in,
+   * deferring the session to the next run.
+   */
+  beforeWrite(): Promise<void>;
+  /**
+   * Persist this run's state entry: pi.appendEntry for the live session; for
+   * a disk view, a directly-appended jsonl line in the exact format pi's own
+   * appendCustomEntry/_persist writes (pi 0.82.1), parentId = the snapshot's
+   * last entry — the same topology an in-session save would leave.
+   */
+  appendState(state: SaveState): Promise<void>;
+}
+
+/** A foreign session jsonl changed on disk between load and write — defer. */
+class SessionChangedError extends Error {}
+
 interface SaveResult {
   message: string;
   /** A file was actually written (created or appended). */
@@ -283,6 +356,8 @@ interface SaveResult {
    * the branch change is normal one-branch-one-file behavior, not a warning).
    */
   switchedFrom: string | null;
+  /** The write included a rename-on-title move of the file (info notice). */
+  renamed: boolean;
 }
 
 interface BranchMeta {
@@ -358,13 +433,322 @@ function repairThinking(s: string): string {
     .trim();
 }
 
+// ---------- foreign sessions for /save-conversation-all ----------
+
+function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
+  return e.type === "message";
+}
+
+/**
+ * pi has no extension API for enumerating or loading other sessions, so the
+ * batch command rebuilds each session straight from its jsonl on disk. The
+ * formats below were verified against pi 0.82.1's session-manager (PRD §5
+ * P3, F2/F10): entries are `{type, id, parentId, timestamp, …}` trees where
+ * the FIRST `type: "session"` header carries the session id and cwd; loading
+ * sets the leaf to the LAST entry in file order (there is no persisted leaf
+ * pointer), and the branch is the parentId chain walked from it — exactly
+ * what pi itself does on resume, so the batch saves the same branch the
+ * session would resume onto. Session names come from the latest
+ * `session_info` entry, also like pi.
+ */
+
+/** Result of loading one session file for the batch. */
+type LoadedSession =
+  | { kind: "view"; view: DiskSessionView }
+  /** The file changed while being read (still written by its runtime) — retry next run. */
+  | { kind: "deferred" }
+  /** Not eligible this run. "legacy" = pre-id/parentId entries (v1) — see loadDiskSession. */
+  | { kind: "skip"; reason: "no-assistant" | "legacy" };
+
+class DiskSessionView implements SaveContext {
+  readonly cwd: string;
+  readonly hasUI = true;
+  readonly session: SaveContext["session"];
+  readonly file: string;
+  private readonly entries: SessionEntry[];
+  private readonly pathEntries: SessionEntry[];
+  private readonly states: SaveState[];
+  private readonly sizeAtLoad: number;
+  private readonly sessionId: string;
+  private readonly name: string | undefined;
+  private readonly leafId: string | null;
+  private readonly sink: (message: string, level: "info" | "warning" | "error") => void;
+  /** Info notices are aggregated by the batch runner instead of shown one by one. */
+  infoNotices = 0;
+
+  constructor(opts: {
+    file: string;
+    entries: SessionEntry[];
+    pathEntries: SessionEntry[];
+    states: SaveState[];
+    sizeAtLoad: number;
+    sessionId: string;
+    cwd: string;
+    name: string | undefined;
+    leafId: string | null;
+    sink: (message: string, level: "info" | "warning" | "error") => void;
+  }) {
+    this.file = opts.file;
+    this.entries = opts.entries;
+    this.pathEntries = opts.pathEntries;
+    this.states = opts.states;
+    this.sizeAtLoad = opts.sizeAtLoad;
+    this.sessionId = opts.sessionId;
+    this.cwd = opts.cwd;
+    this.name = opts.name;
+    this.leafId = opts.leafId;
+    this.sink = opts.sink;
+    this.session = {
+      getBranch: () => this.pathEntries,
+      getEntries: () => this.entries,
+      getSessionId: () => this.sessionId,
+      getSessionFile: () => this.file,
+      getSessionName: () => this.name,
+      getLeafId: () => this.leafId,
+    };
+  }
+
+  /** Short session identity for per-session batch notices. */
+  tag(): string {
+    return this.sessionId.slice(0, 8);
+  }
+
+  notify(message: string, level: "info" | "warning" | "error"): void {
+    if (level === "info") {
+      // Batch aggregates info notices into the summary count.
+      this.infoNotices++;
+      debug(this.tag(), message);
+    } else {
+      // Warnings and errors are anomalies — one per session, tagged.
+      this.sink(`[${this.tag()}] ${message}`, level);
+    }
+  }
+
+  readSaveStates(): Promise<SaveState[] | null> {
+    // The frozen load snapshot, never a fresh re-read (see SaveContext).
+    return Promise.resolve(this.states);
+  }
+
+  warnMixedVersion(state: SaveState): void {
+    // Once per session (PRD 0.3: warn-once is per session; the live adapter
+    // keeps its per-process latch for the live path).
+    if (warnedSessions.has(this.sessionId)) return;
+    warnedSessions.add(this.sessionId);
+    const writer = state.extVersion
+      ? `extension v${state.extVersion} (save-state schema ${state.schema})`
+      : `save-state schema ${state.schema}`;
+    debug(
+      this.tag(),
+      "mixed versions: state entries written by",
+      writer,
+      "— this code is",
+      SAVE_STATE_SCHEMA,
+    );
+    this.notify(
+      `this session was written to by a newer ${writer}, while this process runs older code — restart the session / reload Pi to load the new version`,
+      "warning",
+    );
+  }
+
+  /** OCC: the file must be byte-identical to the load snapshot. */
+  private async assertUnchanged(): Promise<void> {
+    let size: number;
+    try {
+      size = (await fs.stat(this.file)).size;
+    } catch {
+      throw new SessionChangedError("session file vanished since load");
+    }
+    if (size !== this.sizeAtLoad) {
+      throw new SessionChangedError("session file changed since load");
+    }
+  }
+
+  beforeWrite(): Promise<void> {
+    return this.assertUnchanged();
+  }
+
+  async appendState(state: SaveState): Promise<void> {
+    // Last-resort OCC check immediately before the append: a session written
+    // to after this point cannot be helped (the µs stat→append window is
+    // accepted, PRD §9.6 D7), but anything earlier is caught here.
+    await this.assertUnchanged();
+    const entry = {
+      type: "custom" as const,
+      customType: CUSTOM_TYPE,
+      data: state,
+      id: this.generateId(),
+      parentId: this.leafId,
+      timestamp: new Date().toISOString(),
+    };
+    // Single small line via O_APPEND — the same single-write append pi's
+    // _persist does; a concurrent writer interleaves at line granularity
+    // at worst, and every reader skips bad lines.
+    await fs.appendFile(this.file, JSON.stringify(entry) + "\n", "utf-8");
+    debug(this.tag(), "recorded state entry — branchKey:", state.branchKey, "file:", state.file);
+  }
+
+  /** pi's generateId semantics: random 8-hex, collision-checked against the session's ids. */
+  private generateId(): string {
+    for (let i = 0; i < 100; i++) {
+      const id = randomUUID().slice(0, 8);
+      if (!this.entries.some((e) => e.id === id)) return id;
+    }
+    return randomUUID();
+  }
+}
+
+/** Sessions warned about mixed save-state schemas by the batch (per session). */
+const warnedSessions = new Set<string>();
+
+/**
+ * Load one foreign session jsonl for the batch: read it once (OCC — the size
+ * is captured before the read and re-checked after, so the snapshot is
+ * exactly the file as of that size), then rebuild the tree and its current
+ * branch. Skips: sessions with no assistant reply (nothing conversational to
+ * archive — pi does not even persist sessions until their first assistant
+ * entry, so this is mostly a defense against partial/corrupt files); v1-era
+ * files with pre-id/parentId entries — pi rewrites those on load with ids of
+ * its own choosing, so a state line we append (parentId pointing at OUR
+ * synthetic ids) would become an orphan root and steal the resume position
+ * once pi migrates the file, and archiving without a state entry would mint a
+ * duplicate file on every run. Skipping is the only safe treatment.
+ */
+async function loadDiskSession(
+  file: string,
+  sink: (message: string, level: "info" | "warning" | "error") => void,
+): Promise<LoadedSession> {
+  const before = await fs.stat(file); // OCC version token S0
+  const text = await fs.readFile(file, "utf-8");
+  const after = await fs.stat(file);
+  if (after.size !== before.size) return { kind: "deferred" };
+
+  const raw: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      raw.push(JSON.parse(line));
+    } catch {
+      continue; // skip corrupt / mid-write lines (pi's own loader does the same)
+    }
+  }
+
+  const header = raw.find(
+    (e): e is { type: "session"; id?: unknown; cwd?: unknown } =>
+      typeof e === "object" && e !== null && (e as { type?: unknown }).type === "session",
+  );
+  if (
+    !header ||
+    typeof header.id !== "string" ||
+    !header.id ||
+    typeof header.cwd !== "string" ||
+    !header.cwd
+  ) {
+    throw new Error("no valid session header");
+  }
+
+  const entries: SessionEntry[] = [];
+  let sawLegacy = false;
+  for (const e of raw) {
+    if (typeof e !== "object" || e === null) continue;
+    const r = e as Record<string, unknown>;
+    if (r.type === "session") continue; // header — not part of the tree
+    // v1-era entries have no id/parentId structure (pi's migrateV1ToV2
+    // assigns them at load time). See the function doc for why we skip.
+    if (typeof r.id !== "string" || r.parentId === undefined) {
+      sawLegacy = true;
+      break;
+    }
+    if (r.type === "message" && typeof r.message !== "object") continue; // corrupt
+    entries.push(e as SessionEntry);
+  }
+  if (sawLegacy) return { kind: "skip", reason: "legacy" };
+
+  if (!entries.some((e) => isMessageEntry(e) && e.message.role === "assistant")) {
+    return { kind: "skip", reason: "no-assistant" };
+  }
+
+  const byId = new Map<string, SessionEntry>();
+  for (const e of entries) byId.set(e.id, e);
+  // pi's _buildIndex: leaf = last entry in file order (there is no persisted
+  // leaf pointer — the file's last line IS the resume position, F10).
+  const leafId = entries.length > 0 ? entries[entries.length - 1].id : null;
+
+  // Current branch: parentId chain walked from the leaf, exactly like
+  // SessionManager.getBranch. The iteration cap is paranoia against cycles.
+  const pathEntries: SessionEntry[] = [];
+  {
+    let current = leafId !== null ? byId.get(leafId) : undefined;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      pathEntries.push(current);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    pathEntries.reverse();
+  }
+
+  // Latest session_info name, reverse-walked (SessionManager.getSessionName).
+  let name: string | undefined;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e.type === "session_info") {
+      name = e.name?.trim() || undefined;
+      break;
+    }
+  }
+
+  const states: SaveState[] = [];
+  for (const e of entries) {
+    if (e.type === "custom" && e.customType === CUSTOM_TYPE && isSaveState(e.data)) {
+      states.push(e.data);
+    }
+  }
+
+  debug(
+    "loaded session for batch:",
+    path.basename(file),
+    "— entries:",
+    entries.length,
+    "path:",
+    pathEntries.length,
+    "states:",
+    states.length,
+  );
+  return {
+    kind: "view",
+    view: new DiskSessionView({
+      file,
+      entries,
+      pathEntries,
+      states,
+      sizeAtLoad: before.size,
+      sessionId: header.id,
+      cwd: header.cwd,
+      name,
+      leafId,
+      sink,
+    }),
+  };
+}
+
+/**
+ * The project's sessions directory: the folder holding the live session's
+ * jsonl. Fallback for file-less (in-memory) live sessions mirrors pi's
+ * encoding (session-manager v0.82.1: cwd with /, \, : turned into dashes,
+ * wrapped in -- … --) under the default ~/.pi/agent/sessions.
+ */
+function defaultSessionsDir(cwd: string): string {
+  const safe = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  return path.join(os.homedir(), ".pi", "agent", "sessions", safe);
+}
+
 export default function (pi: ExtensionAPI) {
   /**
    * Resolve the target directory. The env var may hold a relative folder name
    * (resolved against the session cwd), an absolute path, or "." / "" for the
    * working directory itself. When unset, the default subfolder is used.
    */
-  function targetDir(ctx: ExtensionContext): string {
+  function targetDir(ctx: SaveContext): string {
     const env = process.env[ENV_SUBDIR];
     if (env === undefined) return path.join(ctx.cwd, DEFAULT_SUBDIR);
     const raw = env.trim();
@@ -451,14 +835,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   /** Title for the filename: session name, else a slug of the first user message. */
-  function titleForFilename(ctx: ExtensionContext, firstUser: string | undefined): string {
-    const name = ctx.sessionManager.getSessionName()?.trim();
+  function titleForFilename(ctx: SaveContext, firstUser: string | undefined): string {
+    const name = ctx.session.getSessionName()?.trim();
     return name ? sanitizeFilenamePart(name) || "untitled" : fallbackTitleForFilename(firstUser);
   }
 
   /** Title for the frontmatter / document heading. */
-  function displayTitle(ctx: ExtensionContext, firstUser: string | undefined): string {
-    const name = ctx.sessionManager.getSessionName()?.trim();
+  function displayTitle(ctx: SaveContext, firstUser: string | undefined): string {
+    const name = ctx.session.getSessionName()?.trim();
     if (name) return name;
     if (firstUser) {
       const snippet = firstUser.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE_LENGTH);
@@ -700,7 +1084,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function computeMeta(
-    ctx: ExtensionContext,
+    ctx: SaveContext,
     pathMessages: SessionMessageEntry[],
     branchKey: string,
     created: string | undefined,
@@ -732,8 +1116,8 @@ export default function (pi: ExtensionAPI) {
     return {
       title: displayTitle(ctx, firstUserText(pathMessages)),
       agent: agent ?? AGENT,
-      sessionId: ctx.sessionManager.getSessionId(),
-      sessionFile: ctx.sessionManager.getSessionFile() ?? null,
+      sessionId: ctx.session.getSessionId(),
+      sessionFile: ctx.session.getSessionFile() ?? null,
       tree: branchKey,
       model,
       provider,
@@ -809,13 +1193,9 @@ export default function (pi: ExtensionAPI) {
     offPathState: SaveState | null;
   }
 
-  function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
-    return e.type === "message";
-  }
-
   /** Brand-new file plan for the current branch (new branch, or recovery). */
   function freshFilePlan(
-    ctx: ExtensionContext,
+    ctx: SaveContext,
     dir: string,
     pathMessages: SessionMessageEntry[],
   ): SavePlan {
@@ -825,7 +1205,7 @@ export default function (pi: ExtensionAPI) {
     // itself: pi session ids are uuidv7 whose leading hex is a millisecond
     // timestamp, so same-month sessions share long prefixes. The tip snapshot
     // is only a degenerate fallback (no session id yet).
-    const sessionId = ctx.sessionManager.getSessionId();
+    const sessionId = ctx.session.getSessionId();
     const branchKey = sessionId
       ? createHash("sha256").update(sessionId).digest("hex").slice(0, 8)
       : pathMessages[pathMessages.length - 1].id;
@@ -846,28 +1226,8 @@ export default function (pi: ExtensionAPI) {
       // A fresh file created under the session's real name is born titled;
       // one created under the fallback slug stays renameable until a real
       // name arrives.
-      titled: Boolean(ctx.sessionManager.getSessionName()?.trim()),
+      titled: Boolean(ctx.session.getSessionName()?.trim()),
     };
-  }
-
-  // One mixed-version warning per process: repeating it every turn would
-  // only train the user to ignore it. Headless runs (no UI) count as warned
-  // too — there is no notification surface to wait for.
-  let mixedVersionWarned = false;
-
-  function warnMixedVersions(ctx: ExtensionContext, st: SaveState): void {
-    if (mixedVersionWarned) return;
-    mixedVersionWarned = true;
-    const writer = st.extVersion
-      ? `extension v${st.extVersion} (save-state schema ${st.schema})`
-      : `save-state schema ${st.schema}`;
-    debug("mixed versions: state entries written by", writer, "— this code is", SAVE_STATE_SCHEMA);
-    if (ctx.hasUI) {
-      ctx.ui.notify(
-        `${NOTIFY_TAG} this session was written to by a newer ${writer}, while this process runs older code — restart the session / reload Pi to load the new version`,
-        "warning",
-      );
-    }
   }
 
   /**
@@ -938,18 +1298,18 @@ export default function (pi: ExtensionAPI) {
    * matches, so it correctly does not take over this branch's file (one
    * branch, one file).
    */
-  async function computePlan(ctx: ExtensionContext): Promise<SavePlanInput | null> {
-    const pathEntries = ctx.sessionManager.getBranch();
+  async function computePlan(ctx: SaveContext): Promise<SavePlanInput | null> {
+    const pathEntries = ctx.session.getBranch();
     const pathMessages = pathEntries.filter(isMessageEntry);
     if (pathMessages.length === 0) return null;
 
     const pos = new Map<string, number>();
     pathEntries.forEach((e, i) => pos.set(e.id, i));
 
-    let states = await readDiskSaveStates(ctx.sessionManager.getSessionFile() ?? null);
+    let states = await ctx.readSaveStates();
     if (states === null) {
       states = [];
-      for (const e of ctx.sessionManager.getEntries()) {
+      for (const e of ctx.session.getEntries()) {
         if (e.type !== "custom" || e.customType !== CUSTOM_TYPE || !isSaveState(e.data)) continue;
         states.push(e.data);
       }
@@ -964,7 +1324,7 @@ export default function (pi: ExtensionAPI) {
     let order = 0;
     for (const st of states) {
       if (st.schema && isNewerSchemaVersion(st.schema, SAVE_STATE_SCHEMA)) {
-        warnMixedVersions(ctx, st);
+        ctx.warnMixedVersion(st);
       }
       if (!st.lastSavedEntryId) {
         offPathState = st;
@@ -1026,17 +1386,24 @@ export default function (pi: ExtensionAPI) {
   /**
    * Rewrite the document heading (the `# title` line written at file
    * creation) to the current title. Only called on rename-on-title saves.
-   * The heading is located as the first line after the frontmatter closing
-   * delimiter rather than "the first # line anywhere", so a manually
-   * deleted heading (whose place would otherwise be taken by some content
-   * heading further down) cannot be mis-rewritten.
+   * The heading is located as the first non-blank line after the frontmatter
+   * closing delimiter (file creation writes exactly one blank line before
+   * it) rather than "the first # line anywhere", so a manually deleted
+   * heading (whose place would otherwise be taken by some content heading
+   * further down) cannot be mis-rewritten.
    */
   function rewriteDocumentHeading(content: string, title: string): string {
     const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(content);
     if (!fm) return content;
     const rest = content.slice(fm[0].length);
-    if (!/^# .*$/.test(rest)) return content; // heading deleted by hand — leave it
-    return fm[0] + rest.replace(/^# .*$/, `# ${title.replace(/[\r\n]+/g, " ")}`);
+    // Blank lines between the frontmatter and the heading belong to the
+    // layout, not the heading — keep them, replace only the heading line.
+    const replaced = rest.replace(
+      /^((?:[ \t]*\r?\n)*)#[^\r\n]*/,
+      (blank: string, prefix: string) => `${prefix}# ${title.replace(/[\r\n]+/g, " ")}`,
+    );
+    if (replaced === rest) return content; // heading deleted by hand — leave it
+    return fm[0] + replaced;
   }
 
   /**
@@ -1058,7 +1425,7 @@ export default function (pi: ExtensionAPI) {
    *   to the current segment (no-op), or when the filename does not parse.
    */
   function planRenameOnTitle(
-    ctx: ExtensionContext,
+    ctx: SaveContext,
     state: SaveState,
     pathMessages: SessionMessageEntry[],
   ): { renameTo: string | null; titled: boolean } {
@@ -1082,7 +1449,7 @@ export default function (pi: ExtensionAPI) {
       return { renameTo: null, titled: true };
     }
 
-    const name = ctx.sessionManager.getSessionName()?.trim();
+    const name = ctx.session.getSessionName()?.trim();
     if (!name) return { renameTo: null, titled: false };
 
     const newTitle = sanitizeFilenamePart(name);
@@ -1120,7 +1487,7 @@ export default function (pi: ExtensionAPI) {
    * candidate, and cutting the chain short would break the
    * "fresh file only when everything failed" semantics.
    */
-  async function resolvePlan(ctx: ExtensionContext, input: SavePlanInput): Promise<SavePlan> {
+  async function resolvePlan(ctx: SaveContext, input: SavePlanInput): Promise<SavePlan> {
     if (input.candidates.length === 0) {
       const fresh = freshFilePlan(ctx, input.dir, input.pathMessages);
       // Recorded states exist but none lies on the current path: the tree
@@ -1230,7 +1597,7 @@ export default function (pi: ExtensionAPI) {
     return fresh;
   }
 
-  async function saveConversation(ctx: ExtensionContext, plan: SavePlan): Promise<SaveResult> {
+  async function saveConversation(ctx: SaveContext, plan: SavePlan): Promise<SaveResult> {
     const filePath = path.join(plan.dir, plan.filename);
 
     await fs.mkdir(plan.dir, { recursive: true });
@@ -1259,6 +1626,7 @@ export default function (pi: ExtensionAPI) {
         file: target,
         recovered: plan.recoveryReason,
         switchedFrom: plan.switchedFrom,
+        renamed: false,
       };
     }
 
@@ -1273,6 +1641,7 @@ export default function (pi: ExtensionAPI) {
         // surface even when there is nothing new to append.
         recovered: plan.recoveryReason,
         switchedFrom: null,
+        renamed: false,
       };
     }
 
@@ -1315,21 +1684,11 @@ export default function (pi: ExtensionAPI) {
       // surface on the append that performed the downgrade.
       recovered: plan.recoveryReason,
       switchedFrom: null,
+      renamed: false,
     };
   }
 
-  function recordState(plan: SavePlan, leafId: string | null): void {
-    pi.appendEntry(CUSTOM_TYPE, {
-      branchKey: plan.branchKey,
-      lastSavedEntryId: leafId,
-      file: plan.filename,
-      schema: SAVE_STATE_SCHEMA,
-      extVersion: EXTENSION_VERSION ?? undefined,
-      titled: plan.titled,
-    });
-  }
-
-  function relativeForUser(ctx: ExtensionContext, file: string): string {
+  function relativeForUser(ctx: SaveContext, file: string): string {
     const rel = path.relative(ctx.cwd, file);
     return rel && !rel.startsWith("..") ? rel : file;
   }
@@ -1354,11 +1713,7 @@ export default function (pi: ExtensionAPI) {
    * name. The move never overwrites: POSIX fs.rename silently replaces an
    * existing target, so an existing one falls back to -1, -2 … suffixes.
    */
-  async function applyRename(
-    ctx: ExtensionContext,
-    plan: SavePlan,
-    result: SaveResult,
-  ): Promise<void> {
+  async function applyRename(ctx: SaveContext, plan: SavePlan, result: SaveResult): Promise<void> {
     if (!plan.renameTo) return;
     const target = await claimFilename(plan.dir, plan.renameTo);
     if (target === null) {
@@ -1375,13 +1730,12 @@ export default function (pi: ExtensionAPI) {
     plan.filename = target;
     plan.titled = true;
     result.file = path.join(plan.dir, target);
-    if (ctx.hasUI) {
-      ctx.ui.notify(`${NOTIFY_TAG} renamed to ${relativeForUser(ctx, result.file)}`, "info");
-    }
+    result.renamed = true;
+    ctx.notify(`${NOTIFY_TAG} renamed to ${relativeForUser(ctx, result.file)}`, "info");
   }
 
   /** Full save cycle: write the file, then persist the branch state entry. */
-  async function runSave(ctx: ExtensionContext): Promise<SaveResult> {
+  async function runSave(ctx: SaveContext): Promise<SaveResult> {
     const input = await computePlan(ctx);
     if (!input) {
       return {
@@ -1391,36 +1745,95 @@ export default function (pi: ExtensionAPI) {
         file: null,
         recovered: null,
         switchedFrom: null,
+        renamed: false,
       };
     }
     const plan = await resolvePlan(ctx, input);
+    // Concurrency guard for disk-backed sessions: bail before ANY write when
+    // the foreign jsonl moved since load. No-op for the live session.
+    await ctx.beforeWrite();
     const result = await saveConversation(ctx, plan);
     if (result.wrote) {
       await applyRename(ctx, plan, result);
-      const leafId = ctx.sessionManager.getLeafId();
-      recordState(plan, leafId);
+      const leafId = ctx.session.getLeafId();
+      await ctx.appendState({
+        branchKey: plan.branchKey,
+        lastSavedEntryId: leafId,
+        file: plan.filename,
+        schema: SAVE_STATE_SCHEMA,
+        extVersion: EXTENSION_VERSION ?? undefined,
+        titled: plan.titled,
+      });
       debug("recorded state entry — branchKey:", plan.branchKey, "leaf:", leafId);
     }
     return result;
   }
 
+  /**
+   * Wrap the real host context as a SaveContext for the live session. The
+   * session surface passes straight through (structural subset), state
+   * entries go through pi.appendEntry, and the mixed-version warning keeps
+   * its per-process latch for the live path.
+   */
+  function liveContext(ctx: ExtensionContext): SaveContext {
+    return {
+      cwd: ctx.cwd,
+      hasUI: ctx.hasUI,
+      notify: (message, level) => {
+        if (ctx.hasUI) ctx.ui.notify(message, level);
+      },
+      session: ctx.sessionManager,
+      readSaveStates: () => readDiskSaveStates(ctx.sessionManager.getSessionFile() ?? null),
+      warnMixedVersion: (st) => {
+        // One mixed-version warning per process: repeating it every turn
+        // would only train the user to ignore it. Headless runs (no UI)
+        // count as warned too — there is no notification surface to wait for.
+        if (mixedVersionWarned) return;
+        mixedVersionWarned = true;
+        const writer = st.extVersion
+          ? `extension v${st.extVersion} (save-state schema ${st.schema})`
+          : `save-state schema ${st.schema}`;
+        debug(
+          "mixed versions: state entries written by",
+          writer,
+          "— this code is",
+          SAVE_STATE_SCHEMA,
+        );
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `${NOTIFY_TAG} this session was written to by a newer ${writer}, while this process runs older code — restart the session / reload Pi to load the new version`,
+            "warning",
+          );
+        }
+      },
+      beforeWrite: async () => {},
+      appendState: async (state) => {
+        pi.appendEntry(CUSTOM_TYPE, state);
+      },
+    };
+  }
+
+  // The live path's mixed-version latch (see liveContext).
+  let mixedVersionWarned = false;
+
   // 1. Automatic: save after every settled agent turn.
   pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
     debug("agent_settled — saving conversation");
     try {
-      const r = await schedule(() => runSave(ctx));
+      const live = liveContext(ctx);
+      const r = await schedule(() => runSave(live));
       // A recovery replaces the routine "created" info: the anomaly is the
       // story worth telling, at a level that distinguishes it (warning).
       if (r.recovered && ctx.hasUI && r.file) {
-        ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`, "warning");
+        ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(live, r.file)}`, "warning");
       } else if (r.wrote && r.created && ctx.hasUI && r.file) {
         if (r.switchedFrom) {
           ctx.ui.notify(
-            `${NOTIFY_TAG} branch changed — new branch file ${relativeForUser(ctx, r.file)}; the earlier branch file ${r.switchedFrom} is kept`,
+            `${NOTIFY_TAG} branch changed — new branch file ${relativeForUser(live, r.file)}; the earlier branch file ${r.switchedFrom} is kept`,
             "info",
           );
         } else {
-          ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(ctx, r.file)}`, "info");
+          ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(live, r.file)}`, "info");
         }
       }
     } catch (e) {
@@ -1436,25 +1849,192 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /" + COMMAND + " invoked");
-        const r = await schedule(() => runSave(ctx));
+        const live = liveContext(ctx);
+        const r = await schedule(() => runSave(live));
         if (ctx.hasUI) {
-          const target = r.file ? relativeForUser(ctx, r.file) : "";
+          const target = r.file ? relativeForUser(live, r.file) : "";
           ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
           if (r.recovered && r.file) {
-            ctx.ui.notify(
-              `${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`,
-              "warning",
-            );
+            ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${target}`, "warning");
           }
           if (r.switchedFrom && r.file) {
             ctx.ui.notify(
-              `${NOTIFY_TAG} branch changed — new branch file ${relativeForUser(ctx, r.file)}; the earlier branch file ${r.switchedFrom} is kept`,
+              `${NOTIFY_TAG} branch changed — new branch file ${target}; the earlier branch file ${r.switchedFrom} is kept`,
               "info",
             );
           }
         }
       } catch (e) {
         debug("/" + COMMAND + " failed:", String(e));
+        if (ctx.hasUI) ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
+      }
+    },
+  });
+
+  // 3. Batch: save every session of this project (PRD §5 P3 + §9.6).
+  async function saveAllSessions(ctx: ExtensionContext): Promise<void> {
+    const started = Date.now();
+    const live = liveContext(ctx);
+    let saved = 0;
+    let freshCreated = 0;
+    let renamed = 0;
+    let switched = 0;
+    let upToDate = 0;
+    let skippedEmpty = 0;
+    let skippedLegacy = 0;
+    let deferred = 0;
+    const failed: string[] = [];
+
+    const count = (r: SaveResult) => {
+      if (r.wrote) {
+        saved++;
+        if (r.created) freshCreated++;
+        if (r.renamed) renamed++;
+        if (r.switchedFrom) switched++;
+      } else {
+        upToDate++;
+      }
+    };
+
+    // The live session first, through the normal path: its in-memory tree may
+    // be fresher than disk, and its state entry goes through pi.appendEntry.
+    try {
+      const r = await runSave(live);
+      count(r);
+      if (ctx.hasUI) {
+        const target = r.file ? relativeForUser(live, r.file) : "";
+        ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
+        if (r.recovered && r.file) {
+          ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${target}`, "warning");
+        }
+        if (r.switchedFrom && r.file) {
+          ctx.ui.notify(
+            `${NOTIFY_TAG} branch changed — new branch file ${target}; the earlier branch file ${r.switchedFrom} is kept`,
+            "info",
+          );
+        }
+      }
+    } catch (e) {
+      failed.push("<current session>");
+      debug("/" + COMMAND_ALL + " live save failed:", String(e));
+      if (ctx.hasUI) {
+        ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
+      }
+    }
+
+    // The project's sessions directory — every session jsonl lives there.
+    const currentFile = ctx.sessionManager.getSessionFile();
+    const dir = currentFile ? path.dirname(currentFile) : defaultSessionsDir(ctx.cwd);
+    const currentId = ctx.sessionManager.getSessionId();
+    const files: { file: string; mtime: number }[] = [];
+    try {
+      const names = (await fs.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+      for (const name of names) {
+        const file = path.join(dir, name);
+        try {
+          files.push({ file, mtime: (await fs.stat(file)).mtimeMs });
+        } catch {
+          // vanished between readdir and stat — the mover; ignore
+        }
+      }
+    } catch (e) {
+      debug("/" + COMMAND_ALL + " cannot list sessions dir:", String(e));
+      if (ctx.hasUI) {
+        ctx.ui.notify(`${NOTIFY_TAG} cannot list sessions directory: ${String(e)}`, "error");
+      }
+      return;
+    }
+    // Newest first: if the run is interrupted, the most recent sessions are done.
+    files.sort((a, b) => b.mtime - a.mtime);
+
+    const sink = (message: string, level: "info" | "warning" | "error") => {
+      if (ctx.hasUI) ctx.ui.notify(`${NOTIFY_TAG} ${message}`, level);
+    };
+
+    for (const { file } of files) {
+      if (currentFile && path.resolve(file) === path.resolve(currentFile)) continue;
+      try {
+        const outcome = await loadDiskSession(file, sink);
+        if (outcome.kind === "deferred") {
+          deferred++;
+          continue;
+        }
+        if (outcome.kind === "skip") {
+          if (outcome.reason === "legacy") skippedLegacy++;
+          else skippedEmpty++;
+          continue;
+        }
+        if (outcome.view.session.getSessionId() === currentId) continue; // same session, other file
+        const view = outcome.view;
+        const r = await runSave(view);
+        count(r);
+        // Recovery warnings are anomalies — shown per session, tagged.
+        if (r.recovered && r.file && ctx.hasUI) {
+          ctx.ui.notify(
+            `${NOTIFY_TAG} [${view.tag()}] ${r.recovered} → ${relativeForUser(live, r.file)}`,
+            "warning",
+          );
+        }
+      } catch (e) {
+        if (e instanceof SessionChangedError) {
+          deferred++;
+          continue;
+        }
+        failed.push(path.basename(file));
+        debug("/" + COMMAND_ALL + " session failed:", path.basename(file), String(e));
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `${NOTIFY_TAG} [${path.basename(file)}] save failed: ${String(e)}`,
+            "error",
+          );
+        }
+      }
+    }
+
+    const summaryParts = [
+      `${saved} saved`,
+      `${upToDate} up to date`,
+      `${skippedEmpty + skippedLegacy} skipped`,
+    ];
+    if (saved && (freshCreated || renamed || switched)) {
+      const detail = [
+        freshCreated ? `${freshCreated} new` : "",
+        renamed ? `${renamed} renamed` : "",
+        switched ? `${switched} branch switches` : "",
+      ]
+        .filter(Boolean)
+        .join(", ");
+      if (detail) summaryParts[0] += ` (${detail})`;
+    }
+    if (skippedEmpty + skippedLegacy) {
+      summaryParts[2] += skippedLegacy
+        ? ` (${skippedEmpty} without assistant reply, ${skippedLegacy} legacy)`
+        : " (no assistant reply)";
+    }
+    if (deferred)
+      summaryParts.push(`${deferred} deferred (changed while saving — next run continues them)`);
+    summaryParts.push(`${failed.length} failed`);
+    if (failed.length) {
+      const shown = failed.slice(0, 5).join(", ");
+      summaryParts.push(`: ${shown}${failed.length > 5 ? " …" : ""}`);
+    }
+    debug("/" + COMMAND_ALL + " finished in", Date.now() - started, "ms");
+    if (ctx.hasUI) {
+      ctx.ui.notify(`${NOTIFY_TAG} /${COMMAND_ALL}: ${summaryParts.join(", ")}`, "info");
+    }
+  }
+
+  pi.registerCommand(COMMAND_ALL, {
+    description:
+      "Save every session of this project to markdown files now (pi-auto-save-to-markdown)",
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      try {
+        debug("manual /" + COMMAND_ALL + " invoked");
+        // The whole batch is serialized against auto-saves and the manual
+        // /save-conversation: same queue, no interleaved claims.
+        await schedule(() => saveAllSessions(ctx));
+      } catch (e) {
+        debug("/" + COMMAND_ALL + " failed:", String(e));
         if (ctx.hasUI) ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
       }
     },

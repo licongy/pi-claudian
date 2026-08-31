@@ -23,6 +23,20 @@ pi install npm:pi-auto-save-to-markdown
 
 手动：运行 `/save-conversation` 立即保存当前分支并显示文件路径。
 
+批量：运行 `/save-conversation-all` 保存**当前项目的全部 session**——即项目的
+`~/.pi/agent/sessions/<编码后的 cwd>/` 目录下的全部 session jsonl。每个 session
+都走与实时保存完全相同的管线（候选链、绝不覆盖守卫、标题追认重命名、恢复告警），
+归档写入**该 session 自己的工作目录**下，与在其中运行 `/save-conversation` 落点完全
+一致。当前 session 最先经正常实时路径保存。细节：
+
+- **幂等**。重复运行只续写或逐 session 报告"up to date"，绝不重复建文件。
+- **跳过**没有任何 assistant 回复的 session（无可归档的对话内容）与 `id/parentId`
+  结构之前的远古遗留文件。
+- **推迟**（defer）保存期间 jsonl 发生变化的 session（其运行时仍在写入）：保存只在
+  文件自读取后未被改动时才继续。被推迟的 session 由其运行时或下一轮批量自然补齐。
+- **汇报**汇总——`N saved, M up to date, K skipped, …`——异常情况逐 session 告警
+  （附 session id 前 8 位标识）。
+
 ## 配置
 
 目标文件夹由环境变量 `PI_SAVE_CONVERSATION_DIR` 控制（Pi 没有扩展设置 API）：
