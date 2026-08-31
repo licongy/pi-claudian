@@ -56,6 +56,13 @@ Filename: `<title>-<tree>-<time>.md`
 - `<tree>` — the id of the deepest message entry at file creation (the branch key)
 - `<time>` — local file-creation time, `YYYYMMDD-HHmmss`
 
+When the session's real name arrives after the file was created (e.g.
+Claudian generates its title only after the first reply), the next save
+renames the file once to `<name>-<tree>-<original-time>.md` — keeping the
+original creation timestamp — and rewrites the frontmatter title and the
+document heading to match. The rename happens at most once: later `/name`
+changes never touch the filename, and manually renamed files are left alone.
+
 ```markdown
 ---
 title: "Fix login redirect loop"

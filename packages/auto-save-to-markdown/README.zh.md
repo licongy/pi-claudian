@@ -46,6 +46,8 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 - `<tree>` — 建文件时分支上最深一条消息的 entry id（分支标识）
 - `<时间>` — 建文件的本地时间，格式 `YYYYMMDD-HHmmss`
 
+会话的真实名称在建文件之后才到达时（如 Claudian 在首轮回复后才生成标题），下一次保存会把文件一次性改名为 `<名称>-<tree>-<原时间戳>.md`（保留原创建时间戳），并同步改写 frontmatter 标题与正文标题。改名至多发生一次：之后的 `/name` 改名不再影响文件名，手动整理过的文件名也不会被动。
+
 ```markdown
 ---
 title: "修复登录重定向死循环"

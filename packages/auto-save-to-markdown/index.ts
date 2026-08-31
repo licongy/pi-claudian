@@ -75,6 +75,21 @@
  *   moving/deleting files for a missing target; a concurrent runtime or an
  *   older extension version for a count mismatch). Every branch therefore
  *   always ends up with a complete, consistent file.
+ * - Rename-on-title: the first save usually happens before the session has
+ *   its real name (Claudian generates the title only after the first reply),
+ *   so the file is created with a slug of the first user message. Once the
+ *   name exists, the next save renames that file exactly once, to
+ *   "<name>-<key>-<original-timestamp>.md" — the original timestamp keeps
+ *   the file's birthday (and makes concurrent or retried renames converge
+ *   on one name), the frontmatter title and the document heading are
+ *   rewritten to match, and the state entry records the new name with
+ *   titled=true. One-way and one-time: a later user /name change never
+ *   touches the filename, and legacy files (state entries predating the
+ *   titled flag) are only renamed when their name segment equals the
+ *   recomputed fallback slug, so manually organized filenames stay
+ *   untouched. A rename never overwrites an existing target (-1, -2 …
+ *   suffixes); a failed rename keeps the old filename — the title fields
+ *   were already fixed — and retries on the next save.
  * - Mixed versions: every state entry records its save-state schema version
  *   ("MAJOR.MINOR", numbered independently of the package version) plus the
  *   writer's package version. A warm process can outlive a package upgrade
@@ -134,7 +149,7 @@ const AGENT = "pi";
  * Bump MINOR when adding optional state fields, MAJOR when changing existing
  * state semantics.
  */
-const SAVE_STATE_SCHEMA = "1.0";
+const SAVE_STATE_SCHEMA = "1.1";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -180,6 +195,14 @@ interface SaveState {
   schema?: string;
   /** Package version of the writer, warning text only. */
   extVersion?: string;
+  /**
+   * Whether the file was created with the session's real name (true) or
+   * with the fallback slug (false). Absent on legacy entries written before
+   * the rename-on-title feature — those are judged by recomputing the
+   * fallback slug against the actual filename. Once true it never goes back:
+   * a later user /name change must not re-trigger a filename rename.
+   */
+  titled?: boolean;
 }
 
 /** Parse a "MAJOR.MINOR" schema version into numeric parts. */
@@ -379,15 +402,19 @@ export default function (pi: ExtensionAPI) {
     return undefined;
   }
 
-  /** Title for the filename: session name, else a slug of the first user message. */
-  function titleForFilename(ctx: ExtensionContext, firstUser: string | undefined): string {
-    const name = ctx.sessionManager.getSessionName()?.trim();
-    if (name) return sanitizeFilenamePart(name) || "untitled";
+  /** Fallback filename title: a slug of the first user message. */
+  function fallbackTitleForFilename(firstUser: string | undefined): string {
     if (firstUser) {
       const slug = sanitizeFilenamePart(firstUser.slice(0, TITLE_FALLBACK_LENGTH));
       if (slug) return slug;
     }
     return "untitled";
+  }
+
+  /** Title for the filename: session name, else a slug of the first user message. */
+  function titleForFilename(ctx: ExtensionContext, firstUser: string | undefined): string {
+    const name = ctx.sessionManager.getSessionName()?.trim();
+    return name ? sanitizeFilenamePart(name) || "untitled" : fallbackTitleForFilename(firstUser);
   }
 
   /** Title for the frontmatter / document heading. */
@@ -696,8 +723,19 @@ export default function (pi: ExtensionAPI) {
     pathMessages: SessionMessageEntry[];
     /** State of the file being continued, when not a full create. */
     state: SaveState | null;
-    /** Set when resolvePlan replaced a continuation with a fresh full save. */
+    /** Set when resolvePlan deviated from the newest state (downgrade, fresh full save). */
     recoveryReason: string | null;
+    /**
+     * Rename-on-title: bare filename to move the file to after this save's
+     * write (the file was created with the fallback slug and the session now
+     * has its real name). Null when no rename is due.
+     */
+    renameTo: string | null;
+    /**
+     * Whether the file counts as properly named — recorded in the state
+     * entry so a fallback-created file is renamed at most once.
+     */
+    titled: boolean;
   }
 
   /** One on-path save state ranked for the continuation candidate chain. */
@@ -742,6 +780,11 @@ export default function (pi: ExtensionAPI) {
       pathMessages,
       state: null,
       recoveryReason: null,
+      renameTo: null,
+      // A fresh file created under the session's real name is born titled;
+      // one created under the fallback slug stays renameable until a real
+      // name arrives.
+      titled: Boolean(ctx.sessionManager.getSessionName()?.trim()),
     };
   }
 
@@ -881,6 +924,75 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
+   * Rewrite the document heading (the `# title` line written at file
+   * creation) to the current title. Only called on rename-on-title saves.
+   * The heading is located as the first line after the frontmatter closing
+   * delimiter rather than "the first # line anywhere", so a manually
+   * deleted heading (whose place would otherwise be taken by some content
+   * heading further down) cannot be mis-rewritten.
+   */
+  function rewriteDocumentHeading(content: string, title: string): string {
+    const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(content);
+    if (!fm) return content;
+    const rest = content.slice(fm[0].length);
+    if (!/^# .*$/.test(rest)) return content; // heading deleted by hand — leave it
+    return fm[0] + rest.replace(/^# .*$/, `# ${title.replace(/[\r\n]+/g, " ")}`);
+  }
+
+  /**
+   * Rename-on-title decision for a file being continued (PRD §9.4).
+   *
+   * A file created before the session had its real name carries the fallback
+   * slug in its filename. Once the session name exists, the save renames it
+   * exactly once:
+   * - "Fallback-named" comes from the state entry's `titled` flag; legacy
+   *   entries (written before the flag existed) are judged by recomputing
+   *   the fallback slug from the first user message and comparing it against
+   *   the actual filename segment — a manually organized filename therefore
+   *   never matches and is left alone.
+   * - The target keeps the ORIGINAL creation timestamp (`<name>-<key>-<ts>`
+   *   with ts parsed from the old filename): the file's birthday stays
+   *   honest, and the target is a deterministic function of the file's own
+   *   identity, so concurrent or retried renames converge on one name.
+   * - No rename while the session is still unnamed, when the name sanitizes
+   *   to the current segment (no-op), or when the filename does not parse.
+   */
+  function planRenameOnTitle(
+    ctx: ExtensionContext,
+    state: SaveState,
+    pathMessages: SessionMessageEntry[],
+  ): { renameTo: string | null; titled: boolean } {
+    const keySuffix = "-" + state.branchKey;
+    const tsMatch = /-(\d{8}-\d{6})\.md$/.exec(state.file);
+    const base = tsMatch !== null ? state.file.slice(0, tsMatch.index) : null;
+    const hasSegments = base !== null && base.endsWith(keySuffix);
+    const titleSegment = hasSegments ? base.slice(0, base.length - keySuffix.length) : null;
+
+    const isFallbackNamed =
+      state.titled !== undefined
+        ? !state.titled
+        : titleSegment !== null &&
+          titleSegment === fallbackTitleForFilename(firstUserText(pathMessages));
+    if (!isFallbackNamed) {
+      // Already properly named, or a legacy file the user organized by hand:
+      // never rename, and record it as titled.
+      return { renameTo: null, titled: true };
+    }
+
+    const name = ctx.sessionManager.getSessionName()?.trim();
+    if (!name) return { renameTo: null, titled: false };
+
+    const newTitle = sanitizeFilenamePart(name);
+    const ts = tsMatch?.[1];
+    if (!newTitle || !ts || titleSegment === null || newTitle === titleSegment) {
+      return { renameTo: null, titled: false };
+    }
+    const renameTo = `${newTitle}-${state.branchKey}-${ts}.md`;
+    debug("rename-on-title planned:", state.file, "→", renameTo);
+    return { renameTo, titled: false };
+  }
+
+  /**
    * Pick the continuation from the ranked candidates: validate each
    * newest-first — the target file must exist AND its frontmatter `messages`
    * count must cover the messages already saved for this branch (path
@@ -967,6 +1079,7 @@ export default function (pi: ExtensionAPI) {
         appendEntries.length,
         "(candidate #" + (i + 1) + " of " + input.candidates.length + ")",
       );
+      const rename = planRenameOnTitle(ctx, c.state, input.pathMessages);
       return {
         dir: input.dir,
         filename: c.state.file,
@@ -975,6 +1088,8 @@ export default function (pi: ExtensionAPI) {
         appendEntries,
         pathMessages: input.pathMessages,
         state: c.state,
+        renameTo: rename.renameTo,
+        titled: rename.titled,
         recoveryReason:
           topFailure === null
             ? null
@@ -1025,7 +1140,7 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    if (plan.appendEntries.length === 0) {
+    if (plan.appendEntries.length === 0 && !plan.renameTo) {
       debug("nothing new since last save:", plan.filename);
       return {
         message: `already up to date (${plan.filename})`,
@@ -1046,19 +1161,30 @@ export default function (pi: ExtensionAPI) {
       parseCreated(existing),
       parseAgent(existing),
     );
-    const appended = renderEntries(plan.appendEntries); // ends with the trailing separator
     let updated = replaceFrontmatter(existing, frontmatter(meta));
-    // Collapse trailing blank lines to a single newline so the separator
-    // always has exactly one blank line above it, whatever earlier saves
-    // (or a manual edit) left behind.
-    updated = updated.replace(/\s*$/, "\n");
-    // Files written by the old format end without a `---` separator; add one
-    // at the boundary so old and new content stay delimited.
-    updated += updated.endsWith("---\n") ? `\n${appended}` : `\n---\n\n${appended}`;
+    // Rename-on-title: rewrite the document heading to the now-real title
+    // (the frontmatter title is refreshed above) while still writing under
+    // the old name — the move itself happens after this write. A rename due
+    // with nothing new to append is still a write: the title fields change,
+    // and the state entry must carry the new name.
+    if (plan.renameTo) updated = rewriteDocumentHeading(updated, meta.title);
+    if (plan.appendEntries.length > 0) {
+      const appended = renderEntries(plan.appendEntries); // ends with the trailing separator
+      // Collapse trailing blank lines to a single newline so the separator
+      // always has exactly one blank line above it, whatever earlier saves
+      // (or a manual edit) left behind.
+      updated = updated.replace(/\s*$/, "\n");
+      // Files written by the old format end without a `---` separator; add one
+      // at the boundary so old and new content stay delimited.
+      updated += updated.endsWith("---\n") ? `\n${appended}` : `\n---\n\n${appended}`;
+    }
     await atomicWrite(filePath, updated);
     debug("appended", plan.appendEntries.length, "entries to:", filePath);
     return {
-      message: `appended ${plan.appendEntries.length} messages to ${plan.filename}`,
+      message:
+        plan.appendEntries.length > 0
+          ? `appended ${plan.appendEntries.length} messages to ${plan.filename}`
+          : `refreshed title of ${plan.filename}`,
       wrote: true,
       created: false,
       file: filePath,
@@ -1075,6 +1201,7 @@ export default function (pi: ExtensionAPI) {
       file: plan.filename,
       schema: SAVE_STATE_SCHEMA,
       extVersion: EXTENSION_VERSION ?? undefined,
+      titled: plan.titled,
     });
   }
 
@@ -1094,6 +1221,50 @@ export default function (pi: ExtensionAPI) {
     return run;
   }
 
+  /**
+   * Move the just-written file to its rename-on-title target (PRD §9.4
+   * D5'/D7'/D8'). Runs AFTER the write, so a failed write never orphans a
+   * renamed file; a failed rename keeps the old filename (the title fields
+   * were already fixed in the write) and leaves titled=false, so the next
+   * save retries — the target is deterministic, so retries converge on one
+   * name. The move never overwrites: POSIX fs.rename silently replaces an
+   * existing target, so an existing one falls back to -1, -2 … suffixes.
+   */
+  async function applyRename(
+    ctx: ExtensionContext,
+    plan: SavePlan,
+    result: SaveResult,
+  ): Promise<void> {
+    if (!plan.renameTo) return;
+    const stem = plan.renameTo.replace(/\.md$/, "");
+    let target = plan.renameTo;
+    for (let i = 1; ; i++) {
+      const taken = await fs
+        .access(path.join(plan.dir, target))
+        .then(() => true)
+        .catch(() => false);
+      if (!taken) break;
+      if (i > 99) {
+        debug("rename-on-title gave up — target and 99 suffixes exist:", plan.renameTo);
+        return;
+      }
+      target = `${stem}-${i}.md`;
+    }
+    try {
+      await fs.rename(path.join(plan.dir, plan.filename), path.join(plan.dir, target));
+    } catch (e) {
+      debug("rename-on-title failed — kept old filename, retrying next save:", String(e));
+      return;
+    }
+    debug("renamed branch file:", plan.filename, "→", target);
+    plan.filename = target;
+    plan.titled = true;
+    result.file = path.join(plan.dir, target);
+    if (ctx.hasUI) {
+      ctx.ui.notify(`${NOTIFY_TAG} renamed to ${relativeForUser(ctx, result.file)}`, "info");
+    }
+  }
+
   /** Full save cycle: write the file, then persist the branch state entry. */
   async function runSave(ctx: ExtensionContext): Promise<SaveResult> {
     const input = await computePlan(ctx);
@@ -1109,6 +1280,7 @@ export default function (pi: ExtensionAPI) {
     const plan = await resolvePlan(ctx, input);
     const result = await saveConversation(ctx, plan);
     if (result.wrote) {
+      await applyRename(ctx, plan, result);
       const leafId = ctx.sessionManager.getLeafId();
       recordState(plan, leafId);
       debug("recorded state entry — branchKey:", plan.branchKey, "leaf:", leafId);
