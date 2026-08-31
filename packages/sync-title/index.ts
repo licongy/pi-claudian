@@ -33,13 +33,28 @@
  *   /name or /sync-title     ready     different        prompt: Pi->C / C->Pi / keep / cancel
  *
  * Triggers: session_start (primary — on resume Claudian's meta is already
- * complete, so the title is pulled in reliably), agent_end (per-turn, with a
- * backoff retry that outlasts Claudian's async title generation), and the
+ * complete, so the title is pulled in reliably), agent_end (per-turn), and the
  * manual /sync-title command. Claudian links the Pi sessionId into its meta and
  * generates the title asynchronously after the first turn, so a not-yet-ready
- * title is retried on a backoff (see RETRY_DELAYS_MS). session_start is also the
- * only trigger that retries while no meta matches yet, so plain `pi` sessions
- * run inside a Claudian vault are not spun on every turn.
+ * title is retried on a backoff (see RETRY_DELAYS_MS).
+ *
+ * The two Claudian delays are waited out differently, by phase:
+ * - no meta matched yet (association wait): strictly bounded polling (see
+ *   NO_MATCH_RETRY_DELAYS_MS). session_start arms the chain once per boot; its
+ *   early attempts scan even before the first message exists — the grace
+ *   window that keeps a slow-to-start conversation alive against the old
+ *   content veto. agent_end arms the same chain at most once per session: a
+ *   plain `pi` session inside a Claudian vault never matches and must not be
+ *   re-polled every turn, so once the chain runs out the session is latched
+ *   and later turns only do their usual single scan (which still catches a
+ *   late Claudian link).
+ * - meta matched but title not ready (generation wait): the backoff retries
+ *   keep running as a backstop, and a directory watcher accelerates them —
+ *   Claudian writing the generated title to its meta file fires fs.watch, a
+ *   debounced reconcile runs within milliseconds, and the watcher is torn
+ *   down once the sync settles (or the session shuts down). No-match phases
+ *   never watch: that phase can be permanent for plain `pi` sessions, while a
+ *   pending title always arrives or fails.
  *
  * Matching: first exact-match by sessionId, then fall back to the sessionFile
  * path (compared through fs.realpath so symlinked vaults match). The Claudian
@@ -71,6 +86,7 @@ import type {
   SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
@@ -89,6 +105,17 @@ import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
  */
 const RETRY_DELAYS_MS = [10_000, 15_000, 20_000, 30_000, 45_000];
 const MAX_RETRY_ATTEMPTS = RETRY_DELAYS_MS.length;
+
+/**
+ * Retry schedule for the association wait, when no Claudian meta matches this
+ * session yet. Strictly bounded and short: attempts inside this chain also
+ * scan before the first message exists (the grace window for slow starters),
+ * so the budget doubles as the grace length — when it runs out the chain
+ * simply ends, and agent_end-armed chains additionally latch the session as
+ * non-Claudian so later turns do not re-arm it (they keep doing their usual
+ * single per-turn scan, unchanged).
+ */
+const NO_MATCH_RETRY_DELAYS_MS = [10_000, 15_000];
 
 /**
  * Detect Pi's stale-ctx error. Every captured ctx (and the pi API) throws
@@ -232,6 +259,106 @@ export default function (pi: ExtensionAPI) {
   // the resulting session_info_changed event is consumed instead of reprocessed.
   let selfWritingName = false;
 
+  // Latched when an agent_end-armed no-match retry chain ran out: this session
+  // is conclusively not Claudian-linked, so no-match retries are never re-armed
+  // for it. Each turn still does its usual single scan, exactly as before.
+  let noMatchRetryLatched = false;
+
+  // ---------- meta watcher (accelerates the title-generation wait) ----------
+  // Armed only while a matched meta's title is still pending/empty; torn down
+  // on settle, stale ctx, watcher error, or session_shutdown. The backoff
+  // retries keep running as a backstop (fs.watch is unreliable on some
+  // network/synced filesystems); whichever settles first disarms the watcher.
+  let metaWatcher: fsSync.FSWatcher | null = null;
+  let watchedCtx: ExtensionContext | null = null;
+  let watchedMetaFile: string | null = null;
+  let watchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Self-write suppression for the watcher. writeClaudianMeta replaces the
+  // meta via tmp+rename and fs.watch delivers that rename asynchronously, so
+  // a boolean flag (like selfWritingName, which relies on the synchronous
+  // session_info_changed re-emit) would race the event — suppress by target
+  // filename within a short window instead. Only this session's own watcher
+  // consults it; other sessions' meta writes are filtered by filename anyway.
+  let selfWriteSuppress: { file: string; until: number } | null = null;
+
+  function armMetaWatcher(ctx: ExtensionContext, metaFile: string, sessionsDir: string): void {
+    if (metaWatcher) return;
+    watchedCtx = ctx;
+    watchedMetaFile = metaFile;
+    try {
+      metaWatcher = fsSync.watch(sessionsDir, (_event, filename) => {
+        // Post-match filter: only this session's meta file matters. A null
+        // filename (possible on some platforms) cannot be filtered, so it
+        // falls through to a debounced reconcile rather than being dropped.
+        if (
+          filename !== null &&
+          watchedMetaFile !== null &&
+          filename !== path.basename(watchedMetaFile)
+        ) {
+          return;
+        }
+        if (
+          selfWriteSuppress &&
+          watchedMetaFile !== null &&
+          selfWriteSuppress.file === watchedMetaFile &&
+          Date.now() < selfWriteSuppress.until
+        ) {
+          return;
+        }
+        scheduleWatchReconcile();
+      });
+    } catch (e) {
+      debug("cannot watch claudian sessions dir:", String(e));
+      watchedCtx = null;
+      watchedMetaFile = null;
+      metaWatcher = null;
+      return;
+    }
+    metaWatcher.on("error", (e) => {
+      debug("meta watcher error:", String(e));
+      disarmMetaWatcher("watcher error — backoff retries continue as backstop");
+    });
+    debug("meta watcher armed on:", sessionsDir, "for:", metaFile);
+  }
+
+  function disarmMetaWatcher(reason: string): void {
+    if (watchDebounceTimer) {
+      clearTimeout(watchDebounceTimer);
+      watchDebounceTimer = null;
+    }
+    if (!metaWatcher) return;
+    metaWatcher.close();
+    metaWatcher = null;
+    watchedCtx = null;
+    watchedMetaFile = null;
+    debug("meta watcher disarmed:", reason);
+  }
+
+  /** Coalesce an event burst into one trailing reconcile (~300ms). */
+  function scheduleWatchReconcile(): void {
+    if (watchDebounceTimer) return;
+    watchDebounceTimer = setTimeout(() => {
+      watchDebounceTimer = null;
+      void runWatchReconcile();
+    }, 300);
+  }
+
+  async function runWatchReconcile(): Promise<void> {
+    const ctx = watchedCtx;
+    if (!ctx || !metaWatcher) return;
+    try {
+      // canRetry false: the backoff chain schedules its own retries; this
+      // path only accelerates a settle that just happened on disk.
+      await reconcileAndMaybeDisarm(ctx, { interactive: false, canRetry: false });
+    } catch (e) {
+      if (isStaleContextError(e)) {
+        disarmMetaWatcher("stale ctx — session replaced or reloaded");
+        return;
+      }
+      debug("watcher reconcile failed:", String(e));
+    }
+  }
+
   async function findMetaForSession(
     sessionsDir: string,
     sessionId: string,
@@ -286,6 +413,9 @@ export default function (pi: ExtensionAPI) {
     const updated = { ...meta, ...patch };
     const tmp = file + ".sync-tmp";
     await fs.writeFile(tmp, JSON.stringify(updated, null, 2), "utf-8");
+    // Suppress the watcher on our own rename for a short window: the fs.watch
+    // event for it arrives asynchronously and would trigger a futile reconcile.
+    selfWriteSuppress = { file, until: Date.now() + 1_000 };
     await fs.rename(tmp, file);
     debug("wrote claudian meta:", file, patch);
   }
@@ -304,13 +434,21 @@ export default function (pi: ExtensionAPI) {
     /** Retry attempt index (0 = initial trigger). Caps the retry budget. */
     attempt?: number;
     /**
-     * Allow retrying when no matching Claudian meta is found yet. Only set by
-     * session_start: a brand-new conversation's sessionId is linked by Claudian
-     * only after the first turn, so the meta legitimately may not match yet.
-     * Other triggers (agent_end) rely on the next turn instead, to avoid a
-     * retry storm for plain `pi` sessions run inside a Claudian vault.
+     * Allow retrying when no matching Claudian meta is found yet. session_start
+     * arms this once per boot; agent_end arms it at most once per session (see
+     * noMatchLatch). The chain is bounded by NO_MATCH_RETRY_DELAYS_MS, and its
+     * early attempts are the grace window that scans even before the first
+     * message exists.
      */
     allowNoMatchRetry?: boolean;
+    /**
+     * When the no-match retry budget runs out, latch the session as
+     * non-Claudian so later agent_end turns do not re-arm it. Only agent_end
+     * sets this; session_start runs once per boot and needs no latch. The
+     * per-turn scan itself is never suppressed — a late Claudian link (later
+     * than the retry budget) is still caught on a subsequent turn.
+     */
+    noMatchLatch?: boolean;
   }
 
   /**
@@ -340,35 +478,48 @@ export default function (pi: ExtensionAPI) {
 
     // Claudian links the Pi sessionId into its meta only after the first turn
     // completes, so a session with no message entries cannot have a matching
-    // meta yet. Skip the directory scan entirely in that case — it would always
-    // return null and just waste I/O. This also lets us cancel retries for idle
-    // plain `pi` sessions started inside a Claudian vault (no conversation at
-    // all) instead of scanning the directory 6 times over ~2 minutes.
+    // meta yet. Skip the directory scan in that case — it would waste I/O —
+    // EXCEPT inside the no-match retry chain: its early attempts are the
+    // grace window that scans even before the first message exists, so a
+    // slow-to-start conversation survives the old content veto (which killed
+    // the chain after 10s and deferred the title sync to a later turn).
     const hasContent = sessionHasMessages(ctx);
+    const inNoMatchGrace =
+      opts.allowNoMatchRetry === true && attempt > 0 && attempt <= NO_MATCH_RETRY_DELAYS_MS.length;
 
-    const found = hasContent ? await findMetaForSession(sessionsDir, sessionId, sessionFile) : null;
+    const found =
+      hasContent || inNoMatchGrace
+        ? await findMetaForSession(sessionsDir, sessionId, sessionFile)
+        : null;
     if (!found) {
-      // Inside a Claudian vault but no meta references this session yet. For a
-      // brand-new conversation this is expected: Claudian links the Pi sessionId
-      // (via get_state) only after the first turn completes. Only session_start
-      // retries here (see allowNoMatchRetry) so plain `pi` sessions run inside a
-      // vault don't spin retries on every turn.
-      if (canScheduleRetry && opts.allowNoMatchRetry) {
-        // On retries (attempt > 0), if no conversation has happened yet, stop
-        // retrying. By retry time a real Claudian conversation would have its
-        // first turn underway (message entries present); an idle plain `pi`
-        // session never will. The initial session_start (attempt 0) always
-        // schedules retry #1 because a brand-new Claudian conversation also
-        // has no content yet — the meta is linked only after the first turn.
-        if (attempt > 0 && !hasContent) {
-          debug("no matching Claudian meta and no conversation content — not a Claudian session");
-          return true;
-        }
-        debug("no matching Claudian meta yet — scheduling retry #" + (attempt + 1));
-        scheduleRetry(ctx, sessionId, attempt + 1, true);
+      // Inside a Claudian vault but no meta references this session yet. For
+      // a brand-new conversation this is expected: Claudian links the Pi
+      // sessionId (via get_state) only around the end of the first turn. The
+      // association wait is strictly bounded polling — a no-match phase can
+      // be permanent for a plain `pi` session inside a vault, so it must
+      // never watch, only poll and give up (see NO_MATCH_RETRY_DELAYS_MS):
+      // - armed by session_start (once per boot) and by agent_end (once per
+      //   session, latched after the chain runs out so plain `pi` sessions
+      //   are not re-polled every turn),
+      // - the chain's early attempts are the grace window scanning without
+      //   content (see inNoMatchGrace above),
+      // - once the budget runs out the chain ends; latched sessions keep
+      //   doing their usual single per-turn scan, which still catches a
+      //   Claudian link that arrives later than the budget.
+      const canScheduleNoMatchRetry =
+        canScheduleRetry &&
+        opts.allowNoMatchRetry === true &&
+        attempt < NO_MATCH_RETRY_DELAYS_MS.length;
+      if (canScheduleNoMatchRetry) {
+        debug("no matching Claudian meta yet — scheduling no-match retry #" + (attempt + 1));
+        scheduleRetry(ctx, sessionId, attempt + 1, true, opts.noMatchLatch === true);
         return false;
       }
-      debug("no matching Claudian meta — not a Claudian session");
+      if (opts.noMatchLatch === true && !noMatchRetryLatched) {
+        noMatchRetryLatched = true;
+        debug("no-match retry budget exhausted — latching session as non-Claudian for this run");
+      }
+      debug("no matching Claudian meta — not a Claudian-linked session (for now)");
       return true; // not a Claudian-originated session (e.g. a plain TUI session)
     }
 
@@ -382,16 +533,22 @@ export default function (pi: ExtensionAPI) {
       if (!cTitle) {
         // Claudian title not ready yet: it may still be generating (status
         // "pending") or, for a brand-new conversation, Claudian may not have
-        // written/linked the title at all. Retry on a backoff until the budget
-        // runs out, then wait for the next turn / session_start.
+        // written/linked the title at all. The backoff retries keep running as
+        // a backstop until the budget runs out, then the next turn /
+        // session_start takes over. While the generation is actually in
+        // flight ("pending" is the only in-flight status — observed values
+        // also include success / failed / absent, e.g. Fork conversations) a
+        // directory watcher accelerates the wait to Claudian's write landing
+        // on disk; a non-pending empty title never arrives, so it is not
+        // worth a watcher and rides the backoff.
         debug(
           "both empty (status:",
           meta.titleGenerationStatus ?? "?",
           ") —",
           canScheduleRetry ? "scheduling retry #" + (attempt + 1) : "giving up",
         );
-        if (canScheduleRetry)
-          scheduleRetry(ctx, sessionId, attempt + 1, opts.allowNoMatchRetry ?? false);
+        if (canScheduleRetry) scheduleRetry(ctx, sessionId, attempt + 1, false);
+        if (pending) armMetaWatcher(ctx, file, sessionsDir);
         return false;
       }
       // Claudian has a title, Pi does not -> write it through
@@ -472,23 +629,40 @@ export default function (pi: ExtensionAPI) {
     return true;
   }
 
+  /**
+   * reconcile() wrapper used by every trigger site (including the watcher):
+   * a settled sync (or a confirmed-unnecessary one) also tears down the meta
+   * watcher — a no-op when it was never armed.
+   */
+  async function reconcileAndMaybeDisarm(
+    ctx: ExtensionContext,
+    opts: ReconcileOptions,
+  ): Promise<boolean> {
+    const settled = await reconcile(ctx, opts);
+    if (settled) disarmMetaWatcher("settled");
+    return settled;
+  }
+
   function scheduleRetry(
     ctx: ExtensionContext,
     sessionId: string,
     nextAttempt: number,
     allowNoMatchRetry: boolean,
+    noMatchLatch = false,
   ) {
     if (pendingRetries.has(sessionId)) return; // a retry is already queued
-    const delay = RETRY_DELAYS_MS[nextAttempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+    const delays = allowNoMatchRetry ? NO_MATCH_RETRY_DELAYS_MS : RETRY_DELAYS_MS;
+    const delay = delays[nextAttempt - 1] ?? delays[delays.length - 1];
     debug("scheduling retry #" + nextAttempt, "in", delay, "ms for", sessionId);
     const timer = setTimeout(async () => {
       pendingRetries.delete(sessionId);
       try {
-        await reconcile(ctx, {
+        await reconcileAndMaybeDisarm(ctx, {
           interactive: false,
           canRetry: true,
           attempt: nextAttempt,
           allowNoMatchRetry,
+          noMatchLatch,
         });
       } catch (e) {
         if (isStaleContextError(e)) {
@@ -689,7 +863,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     debug("session_start — attempting reconcile");
     try {
-      await reconcile(ctx, { interactive: false, canRetry: true, allowNoMatchRetry: true });
+      await reconcileAndMaybeDisarm(ctx, {
+        interactive: false,
+        canRetry: true,
+        allowNoMatchRetry: true,
+      });
     } catch (e) {
       debug("session_start sync error:", String(e));
       /* ignore transient errors */
@@ -702,7 +880,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async (_event: AgentEndEvent, ctx: ExtensionContext) => {
     debug("agent_end — attempting reconcile");
     try {
-      await reconcile(ctx, { interactive: false, canRetry: true });
+      // A latched session is conclusively non-Claudian: don't re-arm no-match
+      // retries (the per-turn scan inside reconcile still happens, as always).
+      await reconcileAndMaybeDisarm(ctx, {
+        interactive: false,
+        canRetry: true,
+        allowNoMatchRetry: !noMatchRetryLatched,
+        noMatchLatch: true,
+      });
     } catch (e) {
       debug("agent_end sync error:", String(e));
       /* ignore transient errors */
@@ -723,7 +908,7 @@ export default function (pi: ExtensionAPI) {
     }
     debug("session_info_changed — attempting reconcile");
     try {
-      await reconcile(ctx, { interactive: true });
+      await reconcileAndMaybeDisarm(ctx, { interactive: true });
     } catch (e) {
       debug("session_info_changed sync error:", String(e));
       /* ignore transient errors */
@@ -737,7 +922,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /sync-title invoked");
-        const done = await reconcile(ctx, { interactive: true, canRetry: true });
+        const done = await reconcileAndMaybeDisarm(ctx, { interactive: true, canRetry: true });
         if (!done) {
           ctx.ui.notify(
             "[Title Sync] Claudian title not ready yet; retrying in the background",
@@ -778,6 +963,7 @@ export default function (pi: ExtensionAPI) {
   //    the timers before that happens. The replacement session fires its own
   //    session_start and re-arms sync on a fresh ctx.
   pi.on("session_shutdown", (_event: SessionShutdownEvent) => {
+    disarmMetaWatcher("session_shutdown");
     if (pendingRetries.size === 0) return;
     debug("session_shutdown — cancelling", pendingRetries.size, "pending retry timer(s)");
     for (const timer of pendingRetries.values()) clearTimeout(timer);

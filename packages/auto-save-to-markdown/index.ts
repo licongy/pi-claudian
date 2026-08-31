@@ -17,9 +17,11 @@
  *   (or a slug of the first user message when unnamed), <tree> is the 8-hex id
  *   of the deepest message entry at file creation, and <time> is the local
  *   file-creation timestamp (YYYYMMDD-HHmmss).
- * - Frontmatter: title, session id, tree (branch key), model, provider,
- *   cumulative cost and tokens (input, output, cache read/write), message
- *   count, created/updated timestamps, project root and session file.
+ * - Frontmatter: title, agent (generator identity, always "pi" here — agent
+ *   plugins for other runtimes would write their own value), session id, tree
+ *   (branch key), model, provider, cumulative cost and tokens (input, output,
+ *   cache read/write), message count, created/updated timestamps, project
+ *   root and session file.
  * - Body format: every message block opens with a setext-H1 info header
  *   (`User <span …>YYYY-MM-DD HH:MM:SS</span>` /
  *   `Assistant <span …>YYYY-MM-DD HH:MM:SS · model</span>`, where the span
@@ -46,10 +48,14 @@
  *   `pi.appendEntry()` custom entries, which are part of the session tree
  *   itself — they are not sent to the LLM and not rendered in the TUI. On
  *   every save the extension finds the file whose latest saved position is the
- *   deepest entry still on the current path; if the tree moved elsewhere
- *   (e.g. /tree navigation followed by a new prompt), no file matches and a
- *   new file is created with the full current branch. Continuing an existing
- *   branch appends only the messages that are new since the last save.
+ *   deepest entry still on the current path; when several states record that
+ *   same position (e.g. after a loss recovery or a title rename), the state
+ *   recorded LAST wins — it names the file the latest successful save
+ *   actually wrote, older ones name superseded files; if the tree moved
+ *   elsewhere (e.g. /tree navigation followed by a new prompt), no position
+ *   matches and a new file is created with the full current branch. Continuing
+ *   an existing branch appends only the messages that are new since the last
+ *   save.
  * - Recovery: a continuation is only kept when the target file exists AND
  *   its frontmatter `messages` count covers the messages already saved for
  *   this branch (a count that exceeds it is fine — a descendant branch
@@ -57,8 +63,18 @@
  *   a different tree position (e.g. /tree navigation plus a save on an older
  *   branch), appending or recreating in place could silently strand this
  *   branch's newer messages — so a brand-new file with the full current
- *   branch is written instead. Every branch therefore always ends up with a
- *   complete, consistent file.
+ *   branch is written instead. A recovery is never silent: it is reported as
+ *   a warning naming the expected file and the likely cause (something
+ *   moving/deleting files for a missing target; a concurrent runtime or an
+ *   older extension version for a count mismatch). Every branch therefore
+ *   always ends up with a complete, consistent file.
+ * - Mixed versions: every state entry records its save-state schema version
+ *   ("MAJOR.MINOR", numbered independently of the package version) plus the
+ *   writer's package version. A warm process can outlive a package upgrade
+ *   and keep running pre-upgrade code against the same session; when a save
+ *   sees state entries written by a NEWER schema, it warns (once per
+ *   session) to restart. Older or unknown schemas are ignored — they are
+ *   indistinguishable from this session's own pre-upgrade history.
  * - Compaction: files archive the ORIGINAL messages (getBranch() returns the
  *   raw tree path, not the compaction-aware context), so a compacted session
  *   still exports its complete history.
@@ -85,6 +101,7 @@ import type {
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 import { debug } from "./debug.js";
 
@@ -93,6 +110,41 @@ const ENV_SUBDIR = "PI_SAVE_CONVERSATION_DIR";
 const DEFAULT_SUBDIR = "ai-conversations";
 const COMMAND = "save-conversation";
 const NOTIFY_TAG = "[AutoSave]";
+/**
+ * Generator identity recorded in the frontmatter. This extension only ever
+ * runs inside Pi, so the value is constant; the field is reserved so a future
+ * extension for a different agent (opencode, codex, …) can write its own.
+ */
+const AGENT = "pi";
+
+/**
+ * Schema version of the save-state entries this extension writes, formatted
+ * "MAJOR.MINOR" and numbered independently of the package version: MAJOR for
+ * incompatible state changes, MINOR for backward-compatible additions. A
+ * state entry written by a NEWER schema means some other runtime in this
+ * session is running a newer version of the extension (a warm process that
+ * outlived a package upgrade) — see the mixed-version warning in computePlan.
+ * Bump MINOR when adding optional state fields, MAJOR when changing existing
+ * state semantics.
+ */
+const SAVE_STATE_SCHEMA = "1.0";
+
+/**
+ * Package version of this extension, read best-effort from the adjacent
+ * package.json at load time. Recorded in state entries purely so the
+ * mixed-version warning can name the newer writer; never used for comparison.
+ */
+const EXTENSION_VERSION: string | null = (() => {
+  try {
+    const pkg: unknown = JSON.parse(
+      fsSync.readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+    );
+    const v = (pkg as { version?: unknown }).version;
+    return typeof v === "string" && v ? v : null;
+  } catch {
+    return null;
+  }
+})();
 
 const MAX_TITLE_LENGTH = 60;
 const TITLE_FALLBACK_LENGTH = 40;
@@ -109,11 +161,36 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
  * `file` is the bare filename inside the target directory, so changing the
  * configured directory (env var) moves future saves without breaking
  * resolution — the file is simply recreated from the full branch if missing.
+ * `schema`/`extVersion` are absent on entries written before they existed;
+ * unknown extra fields on newer entries are ignored here (forward
+ * compatibility), so validation only covers the fields this code reads.
  */
 interface SaveState {
   branchKey: string;
   lastSavedEntryId: string | null;
   file: string;
+  /** Save-state schema version ("MAJOR.MINOR") of the writer. */
+  schema?: string;
+  /** Package version of the writer, warning text only. */
+  extVersion?: string;
+}
+
+/** Parse a "MAJOR.MINOR" schema version into numeric parts. */
+function parseSchemaVersion(v: string): [number, number] | null {
+  const m = /^(\d+)\.(\d+)$/.exec(v.trim());
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+/**
+ * Strictly-newer check, numeric per segment — never lexicographic ("1.10"
+ * must count as newer than "1.9"). Unparseable versions are treated as
+ * unknown and therefore not newer.
+ */
+function isNewerSchemaVersion(other: string, mine: string): boolean {
+  const a = parseSchemaVersion(other);
+  const b = parseSchemaVersion(mine);
+  if (!a || !b) return false;
+  return a[0] !== b[0] ? a[0] > b[0] : a[1] > b[1];
 }
 
 function isSaveState(v: unknown): v is SaveState {
@@ -135,10 +212,14 @@ interface SaveResult {
   /** The write created a brand-new file (vs appending to an existing one). */
   created: boolean;
   file: string | null;
+  /** Why a planned continuation was replaced by a fresh full save, if it was. */
+  recovered: string | null;
 }
 
 interface BranchMeta {
   title: string;
+  /** Generator identity; preserved from the file being appended to. */
+  agent: string;
   sessionId: string | null;
   sessionFile: string | null;
   tree: string;
@@ -498,6 +579,7 @@ export default function (pi: ExtensionAPI) {
   function frontmatter(meta: BranchMeta): string {
     const lines: string[] = ["---"];
     lines.push(`title: ${yamlQuote(meta.title)}`);
+    lines.push(`agent: ${yamlQuote(meta.agent)}`);
     if (meta.sessionId) lines.push(`session_id: ${yamlQuote(meta.sessionId)}`);
     lines.push(`tree: ${yamlQuote(meta.tree)}`);
     if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
@@ -535,11 +617,20 @@ export default function (pi: ExtensionAPI) {
     return Number.isNaN(Date.parse(iso)) ? undefined : iso;
   }
 
+  /** Recover the generator identity from an existing frontmatter block. */
+  function parseAgent(content: string): string | undefined {
+    const m = content.match(/^agent: "(.*)"$/m);
+    if (!m) return undefined;
+    const agent = m[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim();
+    return agent || undefined;
+  }
+
   function computeMeta(
     ctx: ExtensionContext,
     pathMessages: SessionMessageEntry[],
     branchKey: string,
     created: string | undefined,
+    agent: string | undefined,
   ): BranchMeta {
     let model: string | null = null;
     let provider: string | null = null;
@@ -566,6 +657,7 @@ export default function (pi: ExtensionAPI) {
     const now = new Date().toISOString();
     return {
       title: displayTitle(ctx, firstUserText(pathMessages)),
+      agent: agent ?? AGENT,
       sessionId: ctx.sessionManager.getSessionId(),
       sessionFile: ctx.sessionManager.getSessionFile() ?? null,
       tree: branchKey,
@@ -597,6 +689,8 @@ export default function (pi: ExtensionAPI) {
     pathMessages: SessionMessageEntry[];
     /** State of the file being continued, when not a full create. */
     state: SaveState | null;
+    /** Set when resolvePlan replaced a continuation with a fresh full save. */
+    recoveryReason: string | null;
   }
 
   function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
@@ -621,22 +715,50 @@ export default function (pi: ExtensionAPI) {
       appendEntries: [],
       pathMessages,
       state: null,
+      recoveryReason: null,
     };
+  }
+
+  // One mixed-version warning per process: repeating it every turn would
+  // only train the user to ignore it. Headless runs (no UI) count as warned
+  // too — there is no notification surface to wait for.
+  let mixedVersionWarned = false;
+
+  function warnMixedVersions(ctx: ExtensionContext, st: SaveState): void {
+    if (mixedVersionWarned) return;
+    mixedVersionWarned = true;
+    const writer = st.extVersion
+      ? `extension v${st.extVersion} (save-state schema ${st.schema})`
+      : `save-state schema ${st.schema}`;
+    debug("mixed versions: state entries written by", writer, "— this code is", SAVE_STATE_SCHEMA);
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        `${NOTIFY_TAG} this session was written to by a newer ${writer}, while this process runs older code — restart the session / reload Pi to load the new version`,
+        "warning",
+      );
+    }
   }
 
   /**
    * Decide which file the current branch belongs to and what to write.
    *
    * Every save appends a custom entry recording {branchKey, lastSavedEntryId,
-   * file}. Those entries live in the session tree, so a branch's own latest
-   * state is always recoverable — including after resume, /tree navigation,
-   * or /fork. The file to continue is the one whose most recent saved position
-   * is the deepest entry still on the current root→leaf path; when the tree
-   * moved (navigation + re-ask), no position matches and a new file starts.
+   * file, schema}. Those entries live in the session tree, so a branch's own
+   * latest state is always recoverable — including after resume, /tree
+   * navigation, or /fork. The file to continue is the one whose most recent
+   * saved position is the deepest entry still on the current root→leaf path;
+   * when the tree moved (navigation + re-ask), no position matches and a new
+   * file starts.
    *
    * ALL recorded states are considered when picking that position — keeping
    * only the latest state per file could shadow an on-path state with one
    * recorded on a different branch, forcing needless new files.
+   *
+   * Ties on that deepest position (several states recording the same
+   * lastSavedEntryId with different files — after a loss recovery, a title
+   * rename) go to the state recorded LAST: entry order is append order, and
+   * the newest record names the file the latest successful save actually
+   * wrote, while older ones name superseded or dead files.
    */
   function computePlan(ctx: ExtensionContext): SavePlan | null {
     const pathEntries = ctx.sessionManager.getBranch();
@@ -651,9 +773,12 @@ export default function (pi: ExtensionAPI) {
     for (const e of ctx.sessionManager.getEntries()) {
       if (e.type !== "custom" || e.customType !== CUSTOM_TYPE || !isSaveState(e.data)) continue;
       const st = e.data;
+      if (st.schema && isNewerSchemaVersion(st.schema, SAVE_STATE_SCHEMA)) {
+        warnMixedVersions(ctx, st);
+      }
       if (!st.lastSavedEntryId) continue;
       const p = pos.get(st.lastSavedEntryId);
-      if (p === undefined || p <= bestPos) continue;
+      if (p === undefined || p < bestPos) continue;
       bestPos = p;
       bestState = st;
     }
@@ -677,6 +802,7 @@ export default function (pi: ExtensionAPI) {
         appendEntries,
         pathMessages,
         state: bestState,
+        recoveryReason: null,
       };
     }
 
@@ -706,7 +832,12 @@ export default function (pi: ExtensionAPI) {
    * holds a different branch's snapshot (e.g. it was recreated from an older
    * tree position after /tree navigation) — continuing or recreating it in
    * place could silently strand this branch's newer messages, so a brand-new
-   * file with the full current branch is written instead.
+   * file with the full current branch is written instead. A target going
+   * missing is abnormal (something external moved or deleted it) and a count
+   * mismatch usually means another runtime or an older extension version
+   * rewrote the file concurrently, so each fallback records a
+   * recoveryReason that the callers surface as a warning — recovery must
+   * never be silent.
    */
   async function resolvePlan(ctx: ExtensionContext, plan: SavePlan): Promise<SavePlan> {
     if (plan.fullCreate) return plan;
@@ -717,7 +848,11 @@ export default function (pi: ExtensionAPI) {
       .catch(() => false);
     if (!exists) {
       debug("continuation target missing — starting a fresh file:", plan.filename);
-      return freshFilePlan(ctx, plan.dir, plan.pathMessages);
+      const fresh = freshFilePlan(ctx, plan.dir, plan.pathMessages);
+      fresh.recoveryReason =
+        `target file "${plan.filename}" is missing on disk — the full branch was saved to a fresh file instead; ` +
+        "check whether an external tool is moving or deleting files in the archive directory";
+      return fresh;
     }
     const existing = await fs.readFile(filePath, "utf-8");
     const saved = parseMessageCount(existing);
@@ -736,7 +871,12 @@ export default function (pi: ExtensionAPI) {
         ") — starting a fresh file:",
         plan.filename,
       );
-      return freshFilePlan(ctx, plan.dir, plan.pathMessages);
+      const fresh = freshFilePlan(ctx, plan.dir, plan.pathMessages);
+      fresh.recoveryReason =
+        `target file "${plan.filename}" no longer matches this branch's saved messages ` +
+        `(file holds ${saved ?? "no readable count"}, expected ${expected}) — the full branch was saved to a fresh file instead; ` +
+        "this usually means another runtime or an older extension version rewrote it";
+      return fresh;
     }
     return plan;
   }
@@ -747,7 +887,7 @@ export default function (pi: ExtensionAPI) {
     await fs.mkdir(plan.dir, { recursive: true });
 
     if (plan.fullCreate) {
-      const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined);
+      const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined, undefined);
       const body = renderEntries(plan.pathMessages); // ends with the trailing separator
       const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
       await atomicWrite(filePath, content);
@@ -757,6 +897,7 @@ export default function (pi: ExtensionAPI) {
         wrote: true,
         created: true,
         file: filePath,
+        recovered: plan.recoveryReason,
       };
     }
 
@@ -767,11 +908,18 @@ export default function (pi: ExtensionAPI) {
         wrote: false,
         created: false,
         file: filePath,
+        recovered: null,
       };
     }
 
     const existing = await fs.readFile(filePath, "utf-8");
-    const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, parseCreated(existing));
+    const meta = computeMeta(
+      ctx,
+      plan.pathMessages,
+      plan.branchKey,
+      parseCreated(existing),
+      parseAgent(existing),
+    );
     const appended = renderEntries(plan.appendEntries); // ends with the trailing separator
     let updated = replaceFrontmatter(existing, frontmatter(meta));
     // Collapse trailing blank lines to a single newline so the separator
@@ -788,6 +936,7 @@ export default function (pi: ExtensionAPI) {
       wrote: true,
       created: false,
       file: filePath,
+      recovered: null,
     };
   }
 
@@ -796,6 +945,8 @@ export default function (pi: ExtensionAPI) {
       branchKey: plan.branchKey,
       lastSavedEntryId: leafId,
       file: plan.filename,
+      schema: SAVE_STATE_SCHEMA,
+      extVersion: EXTENSION_VERSION ?? undefined,
     });
   }
 
@@ -824,6 +975,7 @@ export default function (pi: ExtensionAPI) {
         wrote: false,
         created: false,
         file: null,
+        recovered: null,
       };
     }
     plan = await resolvePlan(ctx, plan);
@@ -841,7 +993,11 @@ export default function (pi: ExtensionAPI) {
     debug("agent_settled — saving conversation");
     try {
       const r = await schedule(() => runSave(ctx));
-      if (r.wrote && r.created && ctx.hasUI && r.file) {
+      // A recovery replaces the routine "created" info: the anomaly is the
+      // story worth telling, at a level that distinguishes it (warning).
+      if (r.recovered && ctx.hasUI && r.file) {
+        ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`, "warning");
+      } else if (r.wrote && r.created && ctx.hasUI && r.file) {
         ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(ctx, r.file)}`, "info");
       }
     } catch (e) {
@@ -861,6 +1017,12 @@ export default function (pi: ExtensionAPI) {
         if (ctx.hasUI) {
           const target = r.file ? relativeForUser(ctx, r.file) : "";
           ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
+          if (r.recovered && r.file) {
+            ctx.ui.notify(
+              `${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`,
+              "warning",
+            );
+          }
         }
       } catch (e) {
         debug("/" + COMMAND + " failed:", String(e));

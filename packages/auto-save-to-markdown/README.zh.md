@@ -49,10 +49,11 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 ```markdown
 ---
 title: "修复登录重定向死循环"
+agent: "pi"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 tree: "a1b2c3d4"
-model: "claude-sonnet-4-5"
-provider: "anthropic"
+model: "z-ai/glm-5.3"
+provider: "openrouter"
 cost: 0.023401
 tokens: 18745
 tokens_input: 15230

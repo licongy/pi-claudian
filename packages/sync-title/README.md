@@ -64,9 +64,17 @@ Notes:
   sync moment — Claudian has already persisted its meta, so the title is pulled
   in immediately) and after each agent turn.
 - Claudian generates the conversation title asynchronously _after_ the first
-  turn and only then links the Pi session id into its meta. While the title is
-  not ready yet, the extension waits and retries on a backoff (~2 minutes total)
-  rather than giving up after the first attempt.
+  turn and only then links the Pi session id into its meta. Both waits are
+  handled by phase: the **association wait** (no meta matched yet) is strictly
+  bounded polling — session_start arms a short retry chain whose early
+  attempts also scan before the first message exists, so a slow-to-start
+  conversation is not abandoned; agent_end arms the same chain at most once per
+  session (after it runs out the session is latched as non-Claudian, so plain
+  `pi` sessions are not re-polled every turn). The **title wait** (meta matched,
+  title still pending) keeps the backoff retries (~2 minutes total) as a
+  backstop and additionally watches the `.claudian/sessions` directory: when
+  Claudian writes the generated title, a debounced reconcile runs within
+  milliseconds and the watcher is torn down once the sync settles.
 - Matches the Claudian meta file by Pi session UUID first, falling back to the
   `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
   vaults match).
@@ -81,8 +89,8 @@ Notes:
   Claudian title.
 - Silent no-op outside of a Claudian-managed vault (e.g. plain TUI sessions).
   Plain `pi` sessions run _inside_ a Claudian vault are also left alone: the
-  not-yet-linked meta is only probed once when the session starts, so there is
-  no per-turn retry noise.
+  association-wait retry chain runs at most once per session and is then
+  latched, so there is no per-turn retry noise.
 - While Claudian's title status is `pending`, the extension waits rather than
   writing back a Pi name that would race the generator.
 - Writes back to Claudian are atomic (tmp file + rename) so Claudian never reads
