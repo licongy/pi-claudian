@@ -26,7 +26,7 @@ pi install npm:pi-auto-save-to-markdown
 ## Usage
 
 Automatic: after every settled agent turn (`agent_settled`), the current
-conversation branch is written to `<cwd>/<folder>/<title>-<tree>-<time>.md`.
+conversation branch is written to `<cwd>/<folder>/<title>-<key>-<time>.md`.
 
 Manual: run `/save-conversation` to save the current branch immediately and
 report the file path.
@@ -49,16 +49,19 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 
 ## File naming and frontmatter
 
-Filename: `<title>-<tree>-<time>.md`
+Filename: `<title>-<key>-<time>.md`
 
 - `<title>` — the session name (`/name`), or a slug of the first user message
   when the session is unnamed
-- `<tree>` — the id of the deepest message entry at file creation (the branch key)
+- `<key>` — the first 8 hex of the SHA-256 of the session id: every file of
+  one session shares it, so a session's files cluster in the directory across
+  recoveries and resumes (files created by older versions carry the id of the
+  deepest message entry at file creation instead)
 - `<time>` — local file-creation time, `YYYYMMDD-HHmmss`
 
 When the session's real name arrives after the file was created (e.g.
 Claudian generates its title only after the first reply), the next save
-renames the file once to `<name>-<tree>-<original-time>.md` — keeping the
+renames the file once to `<name>-<key>-<original-time>.md` — keeping the
 original creation timestamp — and rewrites the frontmatter title and the
 document heading to match. The rename happens at most once: later `/name`
 changes never touch the filename, and manually renamed files are left alone.
@@ -67,8 +70,9 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
+format_version: "1.0"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
-tree: "a1b2c3d4"
+tree: "c2088d77"
 model: "z-ai/glm-5.3"
 provider: "openrouter"
 cost: 0.023401
@@ -158,6 +162,9 @@ root-to-leaf path that branch sees.
   model) is refreshed.
 - **`/tree` + new prompt (a different branch)** → a _new file_ is created
   containing the full new branch (the shared prefix plus the new exchange).
+  The save also notifies (info) that the branch changed, naming the new file
+  and the earlier branch's kept file, so multiple files of one session stay
+  navigable.
 - **Forking at the current tip** → the existing file continues (its content is
   already an exact prefix of the new branch), so no duplicate file is created.
 - **Resuming later** (restart, `/resume`, `/fork`, `/clone`) → the branch is
@@ -179,8 +186,10 @@ target fails — the file was deleted, or was rewritten from a different tree
 position (e.g. a save on an older branch after `/tree` navigation), where
 continuing could silently strand the newer branch's messages — a **fresh file
 with the full current branch** is written instead, with a warning naming the
-failed target. Every branch therefore always ends up with a complete,
-consistent file.
+failed target. A fresh file never overwrites an existing filename either (an
+existing name falls back to `-1`, `-2` … suffixes), so two runtimes recovering
+the same lost file in the same second cannot silently overwrite each other.
+Every branch therefore always ends up with a complete, consistent file.
 
 Compacted sessions still export their **full original history** — the archive
 always contains the complete conversation, not the compacted context.

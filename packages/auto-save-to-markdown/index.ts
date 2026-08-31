@@ -13,15 +13,21 @@
  *   directory the session was started in), defaulting to `ai-conversations`.
  *   Override with the PI_SAVE_CONVERSATION_DIR environment variable; set it to
  *   "." or "" to save directly into the working directory.
- * - Filename: `<title>-<tree>-<time>.md`, where <title> is the session name
- *   (or a slug of the first user message when unnamed), <tree> is the 8-hex id
- *   of the deepest message entry at file creation, and <time> is the local
- *   file-creation timestamp (YYYYMMDD-HHmmss).
+ * - Filename: `<title>-<key>-<time>.md`, where <title> is the session name
+ *   (or a slug of the first user message when unnamed), <key> is the first
+ *   8 hex of the SHA-256 of the session id (the same value for every file
+ *   of one session, so a session's files cluster in the archive directory
+ *   across recoveries and resumes; files created before this scheme carry
+ *   the 8-hex id of the deepest message entry at their creation), and
+ *   <time> is the local file-creation timestamp (YYYYMMDD-HHmmss).
  * - Frontmatter: title, agent (generator identity, always "pi" here — agent
- *   plugins for other runtimes would write their own value), session id, tree
- *   (branch key), model, provider, cumulative cost and tokens (input, output,
- *   cache read/write), message count, created/updated timestamps, project
- *   root and session file.
+ *   plugins for other runtimes would write their own value), format_version
+ *   (the document format of the last write — additive frontmatter fields
+ *   never bump it; see FORMAT_VERSION), session id, tree (the filename
+ *   key — the session-id hash for new files, the legacy branch-tip id for
+ *   files created before it), model, provider, cumulative cost and tokens
+ *   (input, output, cache read/write), message count, created/updated
+ *   timestamps, project root and session file.
  * - Body format: every message block opens with a setext-H1 info header
  *   (`User <span …>YYYY-MM-DD HH:MM:SS</span>` /
  *   `Assistant <span …>YYYY-MM-DD HH:MM:SS · model</span>`, where the span
@@ -56,9 +62,10 @@
  *   state recorded LAST wins: it names the file the latest successful save
  *   actually wrote, older ones name superseded files. If the tree moved
  *   elsewhere (e.g. /tree navigation followed by a new prompt), no position
- *   matches and a new file is created with the full current branch. Continuing
- *   an existing branch appends only the messages that are new since the last
- *   save.
+ *   matches and a new file is created with the full current branch, with an
+ *   info notice naming the earlier branch's kept file so the switch stays
+ *   visible in the archive. Continuing an existing branch appends only the
+ *   messages that are new since the last save.
  * - Recovery: candidates are validated newest-first — the target file must
  *   exist AND its frontmatter `messages` count must cover the messages
  *   already saved for this branch (a count that exceeds it is fine — a
@@ -73,8 +80,11 @@
  *   Recoveries and downgrades are never silent: each is reported as a
  *   warning naming the failed target and the likely cause (something
  *   moving/deleting files for a missing target; a concurrent runtime or an
- *   older extension version for a count mismatch). Every branch therefore
- *   always ends up with a complete, consistent file.
+ *   older extension version for a count mismatch). A fresh file never
+ *   overwrites an existing filename either (-1, -2 … suffixes claim a free
+ *   one): two runtimes recovering the same lost file in the same second
+ *   would otherwise mint the same name and silently overwrite each other.
+ *   Every branch therefore always ends up with a complete, consistent file.
  * - Rename-on-title: the first save usually happens before the session has
  *   its real name (Claudian generates the title only after the first reply),
  *   so the file is created with a slug of the first user message. Once the
@@ -122,6 +132,7 @@ import type {
   SessionEntry,
   SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as fsSync from "node:fs";
 import * as path from "node:path";
@@ -150,6 +161,20 @@ const AGENT = "pi";
  * state semantics.
  */
 const SAVE_STATE_SCHEMA = "1.1";
+
+/**
+ * Version of the markdown document format this code writes ("MAJOR.MINOR",
+ * numbered independently of the save-state schema above). Semantics: the
+ * version of the LAST writer — an appended file is stamped with the current
+ * value even when blocks inside predate it, so "claimed version vs the block
+ * formats actually present" detects mixed-era files. Bump rules: MAJOR for
+ * structural breaks that change how a parser or migration tool must match
+ * blocks (message header structure, `---` separators, callout syntax);
+ * MINOR for parse-invariant tweaks and bugfixes (header styling, content
+ * transforms like the thinking repair); additive frontmatter fields do NOT
+ * bump it — they are invisible to any within-major parser.
+ */
+const FORMAT_VERSION = "1.0";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -188,6 +213,14 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
  * compatibility), so validation only covers the fields this code reads.
  */
 interface SaveState {
+  /**
+   * Key segment of the filename this state addresses. Entries written since
+   * the session-hash scheme record the first 8 hex of the SHA-256 of the
+   * session id (stable per session); legacy entries carry the 8-hex id of the
+   * deepest message entry at file creation. Only ever used as the recorded
+   * value — files are addressed by their full recorded name, never recomputed
+   * from the key.
+   */
   branchKey: string;
   lastSavedEntryId: string | null;
   file: string;
@@ -244,6 +277,12 @@ interface SaveResult {
   file: string | null;
   /** Why a planned continuation was replaced by a fresh full save, if it was. */
   recovered: string | null;
+  /**
+   * Set when a fresh file was created because the tree moved to a different
+   * branch: the previous branch's file that stays on disk (info notice —
+   * the branch change is normal one-branch-one-file behavior, not a warning).
+   */
+  switchedFrom: string | null;
 }
 
 interface BranchMeta {
@@ -614,6 +653,7 @@ export default function (pi: ExtensionAPI) {
     const lines: string[] = ["---"];
     lines.push(`title: ${yamlQuote(meta.title)}`);
     lines.push(`agent: ${yamlQuote(meta.agent)}`);
+    lines.push(`format_version: ${yamlQuote(FORMAT_VERSION)}`);
     if (meta.sessionId) lines.push(`session_id: ${yamlQuote(meta.sessionId)}`);
     lines.push(`tree: ${yamlQuote(meta.tree)}`);
     if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
@@ -736,6 +776,12 @@ export default function (pi: ExtensionAPI) {
      * entry so a fallback-created file is renamed at most once.
      */
     titled: boolean;
+    /**
+     * Branch-change notice: the previous branch's file that stays on disk,
+     * when this plan is a fresh file because recorded states exist but none
+     * lies on the current path (a brand-new session has no states at all).
+     */
+    switchedFrom: string | null;
   }
 
   /** One on-path save state ranked for the continuation candidate chain. */
@@ -755,6 +801,12 @@ export default function (pi: ExtensionAPI) {
     pos: Map<string, number>;
     /** On-path candidates ranked by position desc, then record order desc. */
     candidates: StateCandidate[];
+    /**
+     * Latest recorded state that is NOT on the current path, when any state
+     * exists: a fresh file with no candidates is a branch change (info
+     * notice naming this state's file), not a brand-new session.
+     */
+    offPathState: SaveState | null;
   }
 
   function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
@@ -767,7 +819,16 @@ export default function (pi: ExtensionAPI) {
     dir: string,
     pathMessages: SessionMessageEntry[],
   ): SavePlan {
-    const branchKey = pathMessages[pathMessages.length - 1].id;
+    // Session-key scheme: the filename key is the first 8 hex of the SHA-256
+    // of the session id — stable per session, so every file of one session
+    // clusters together across recoveries and resumes. Never truncate the id
+    // itself: pi session ids are uuidv7 whose leading hex is a millisecond
+    // timestamp, so same-month sessions share long prefixes. The tip snapshot
+    // is only a degenerate fallback (no session id yet).
+    const sessionId = ctx.sessionManager.getSessionId();
+    const branchKey = sessionId
+      ? createHash("sha256").update(sessionId).digest("hex").slice(0, 8)
+      : pathMessages[pathMessages.length - 1].id;
     const title = titleForFilename(ctx, firstUserText(pathMessages));
     const filename = `${title}-${branchKey}-${fileTimestamp(new Date())}.md`;
     debug("new branch file:", filename, "branchKey:", branchKey);
@@ -781,6 +842,7 @@ export default function (pi: ExtensionAPI) {
       state: null,
       recoveryReason: null,
       renameTo: null,
+      switchedFrom: null,
       // A fresh file created under the session's real name is born titled;
       // one created under the fallback slug stays renameable until a real
       // name arrives.
@@ -867,7 +929,9 @@ export default function (pi: ExtensionAPI) {
    * order is append order, and the newest record names the file the latest
    * successful save actually wrote, while older ones name superseded or dead
    * files. When the tree moved (navigation + re-ask), no position matches and
-   * resolvePlan starts a new file.
+   * resolvePlan starts a new file; states existing but none matching means
+   * a branch change, and the fresh file then carries the previous branch's
+   * file as a notice (switchedFrom).
    *
    * Positions are resolved against THIS process's view of the current path:
    * a state recorded by another runtime on a genuinely diverged branch never
@@ -893,19 +957,29 @@ export default function (pi: ExtensionAPI) {
     }
 
     const candidates: StateCandidate[] = [];
+    // Latest state not on the current path, in record (scan) order: when no
+    // candidate matches, its file is the previous branch's file that stays on
+    // disk — named in the branch-change info notice.
+    let offPathState: SaveState | null = null;
     let order = 0;
     for (const st of states) {
       if (st.schema && isNewerSchemaVersion(st.schema, SAVE_STATE_SCHEMA)) {
         warnMixedVersions(ctx, st);
       }
-      if (!st.lastSavedEntryId) continue;
+      if (!st.lastSavedEntryId) {
+        offPathState = st;
+        continue;
+      }
       const p = pos.get(st.lastSavedEntryId);
-      if (p === undefined) continue;
+      if (p === undefined) {
+        offPathState = st;
+        continue;
+      }
       candidates.push({ state: st, pos: p, order: order++ });
     }
     candidates.sort((a, b) => b.pos - a.pos || b.order - a.order);
 
-    return { dir: targetDir(ctx), pathMessages, pos, candidates };
+    return { dir: targetDir(ctx), pathMessages, pos, candidates, offPathState };
   }
 
   // ---------- writing ----------
@@ -914,6 +988,32 @@ export default function (pi: ExtensionAPI) {
     const tmp = file + ".save-tmp";
     await fs.writeFile(tmp, content, "utf-8");
     await fs.rename(tmp, file);
+  }
+
+  /**
+   * Claim a filename that does not exist yet, never overwriting: an existing
+   * target falls back to -1, -2 … suffixes (POSIX fs.rename silently replaces
+   * an existing file). Every name-taking write goes through this — both
+   * rename-on-title targets and fresh full saves, where two runtimes
+   * recovering the same lost file in the same second would otherwise mint
+   * the same name and silently overwrite each other. Returns null when the
+   * desired name and 99 suffixes are all taken.
+   */
+  async function claimFilename(dir: string, desired: string): Promise<string | null> {
+    const stem = desired.replace(/\.md$/, "");
+    let target = desired;
+    for (let i = 1; ; i++) {
+      const taken = await fs
+        .access(path.join(dir, target))
+        .then(() => true)
+        .catch(() => false);
+      if (!taken) return target;
+      if (i > 99) {
+        debug("cannot claim a filename — desired name and 99 suffixes exist:", desired);
+        return null;
+      }
+      target = `${stem}-${i}.md`;
+    }
   }
 
   function replaceFrontmatter(existing: string, fm: string): string {
@@ -963,7 +1063,10 @@ export default function (pi: ExtensionAPI) {
     pathMessages: SessionMessageEntry[],
   ): { renameTo: string | null; titled: boolean } {
     const keySuffix = "-" + state.branchKey;
-    const tsMatch = /-(\d{8}-\d{6})\.md$/.exec(state.file);
+    // The trailing group tolerates (and drops) the -1, -2 … suffixes that
+    // claimFilename may have added, so a suffixed file keeps its rename
+    // eligibility; the suffix is not carried into the deterministic target.
+    const tsMatch = /-(\d{8}-\d{6})(?:-\d{1,2})?\.md$/.exec(state.file);
     const base = tsMatch !== null ? state.file.slice(0, tsMatch.index) : null;
     const hasSegments = base !== null && base.endsWith(keySuffix);
     const titleSegment = hasSegments ? base.slice(0, base.length - keySuffix.length) : null;
@@ -1019,7 +1122,13 @@ export default function (pi: ExtensionAPI) {
    */
   async function resolvePlan(ctx: ExtensionContext, input: SavePlanInput): Promise<SavePlan> {
     if (input.candidates.length === 0) {
-      return freshFilePlan(ctx, input.dir, input.pathMessages);
+      const fresh = freshFilePlan(ctx, input.dir, input.pathMessages);
+      // Recorded states exist but none lies on the current path: the tree
+      // moved to a different branch (a brand-new session has no states at
+      // all). Normal one-branch-one-file behavior — surfaced as info so the
+      // earlier branch's kept file is not mistaken for this branch's file.
+      fresh.switchedFrom = input.offPathState ? input.offPathState.file : null;
+      return fresh;
     }
 
     // Failure of the newest candidate, recorded once for the downgrade /
@@ -1090,6 +1199,7 @@ export default function (pi: ExtensionAPI) {
         state: c.state,
         renameTo: rename.renameTo,
         titled: rename.titled,
+        switchedFrom: null,
         recoveryReason:
           topFailure === null
             ? null
@@ -1126,17 +1236,29 @@ export default function (pi: ExtensionAPI) {
     await fs.mkdir(plan.dir, { recursive: true });
 
     if (plan.fullCreate) {
+      // Never overwrite: two runtimes recovering the same lost file in the
+      // same second mint the same name — claim a free one instead. The
+      // claimed name is what the state entry records (recordState below).
+      const claimed = await claimFilename(plan.dir, plan.filename);
+      if (claimed === null) {
+        throw new Error(
+          `cannot create a fresh save — "${plan.filename}" and 99 suffixes all exist`,
+        );
+      }
+      plan.filename = claimed;
+      const target = path.join(plan.dir, plan.filename);
       const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined, undefined);
       const body = renderEntries(plan.pathMessages); // ends with the trailing separator
       const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
-      await atomicWrite(filePath, content);
-      debug("created conversation file:", filePath);
+      await atomicWrite(target, content);
+      debug("created conversation file:", target);
       return {
         message: `saved ${plan.filename} (${plan.pathMessages.length} messages)`,
         wrote: true,
         created: true,
-        file: filePath,
+        file: target,
         recovered: plan.recoveryReason,
+        switchedFrom: plan.switchedFrom,
       };
     }
 
@@ -1150,6 +1272,7 @@ export default function (pi: ExtensionAPI) {
         // A downgrade warning (candidate chain fell back to this file) must
         // surface even when there is nothing new to append.
         recovered: plan.recoveryReason,
+        switchedFrom: null,
       };
     }
 
@@ -1191,6 +1314,7 @@ export default function (pi: ExtensionAPI) {
       // A downgrade warning (candidate chain fell back to this file) must
       // surface on the append that performed the downgrade.
       recovered: plan.recoveryReason,
+      switchedFrom: null,
     };
   }
 
@@ -1236,19 +1360,10 @@ export default function (pi: ExtensionAPI) {
     result: SaveResult,
   ): Promise<void> {
     if (!plan.renameTo) return;
-    const stem = plan.renameTo.replace(/\.md$/, "");
-    let target = plan.renameTo;
-    for (let i = 1; ; i++) {
-      const taken = await fs
-        .access(path.join(plan.dir, target))
-        .then(() => true)
-        .catch(() => false);
-      if (!taken) break;
-      if (i > 99) {
-        debug("rename-on-title gave up — target and 99 suffixes exist:", plan.renameTo);
-        return;
-      }
-      target = `${stem}-${i}.md`;
+    const target = await claimFilename(plan.dir, plan.renameTo);
+    if (target === null) {
+      debug("rename-on-title gave up — target and 99 suffixes exist:", plan.renameTo);
+      return;
     }
     try {
       await fs.rename(path.join(plan.dir, plan.filename), path.join(plan.dir, target));
@@ -1275,6 +1390,7 @@ export default function (pi: ExtensionAPI) {
         created: false,
         file: null,
         recovered: null,
+        switchedFrom: null,
       };
     }
     const plan = await resolvePlan(ctx, input);
@@ -1298,7 +1414,14 @@ export default function (pi: ExtensionAPI) {
       if (r.recovered && ctx.hasUI && r.file) {
         ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`, "warning");
       } else if (r.wrote && r.created && ctx.hasUI && r.file) {
-        ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(ctx, r.file)}`, "info");
+        if (r.switchedFrom) {
+          ctx.ui.notify(
+            `${NOTIFY_TAG} branch changed — new branch file ${relativeForUser(ctx, r.file)}; the earlier branch file ${r.switchedFrom} is kept`,
+            "info",
+          );
+        } else {
+          ctx.ui.notify(`${NOTIFY_TAG} ${relativeForUser(ctx, r.file)}`, "info");
+        }
       }
     } catch (e) {
       debug("auto-save failed:", String(e));
@@ -1321,6 +1444,12 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(
               `${NOTIFY_TAG} ${r.recovered} → ${relativeForUser(ctx, r.file)}`,
               "warning",
+            );
+          }
+          if (r.switchedFrom && r.file) {
+            ctx.ui.notify(
+              `${NOTIFY_TAG} branch changed — new branch file ${relativeForUser(ctx, r.file)}; the earlier branch file ${r.switchedFrom} is kept`,
+              "info",
             );
           }
         }
