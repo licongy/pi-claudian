@@ -1,5 +1,5 @@
 /**
- * auto-save-to-markdown
+ * pi-auto-save-to-markdown
  *
  * Automatically saves the current conversation to a markdown file after every
  * completed agent turn, with session metadata in a YAML frontmatter block.
@@ -46,25 +46,32 @@
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
- *   itself — they are not sent to the LLM and not rendered in the TUI. On
- *   every save the extension finds the file whose latest saved position is the
- *   deepest entry still on the current path; when several states record that
- *   same position (e.g. after a loss recovery or a title rename), the state
- *   recorded LAST wins — it names the file the latest successful save
- *   actually wrote, older ones name superseded files; if the tree moved
+ *   itself — they are not sent to the LLM and not rendered in the TUI. State
+ *   discovery reads those entries straight from the session jsonl on disk
+ *   (the shared append log is the single source of truth), so a warm process
+ *   whose in-memory tree lags behind still sees states recorded by other
+ *   runtimes; the in-memory tree is only a fallback when the file is
+ *   unavailable. Every save ranks the recorded states whose saved position
+ *   lies on the current path — deepest first, and among equal positions the
+ *   state recorded LAST wins: it names the file the latest successful save
+ *   actually wrote, older ones name superseded files. If the tree moved
  *   elsewhere (e.g. /tree navigation followed by a new prompt), no position
  *   matches and a new file is created with the full current branch. Continuing
  *   an existing branch appends only the messages that are new since the last
  *   save.
- * - Recovery: a continuation is only kept when the target file exists AND
- *   its frontmatter `messages` count covers the messages already saved for
- *   this branch (a count that exceeds it is fine — a descendant branch
- *   extended the same file). If the file was deleted, or was rewritten from
- *   a different tree position (e.g. /tree navigation plus a save on an older
- *   branch), appending or recreating in place could silently strand this
- *   branch's newer messages — so a brand-new file with the full current
- *   branch is written instead. A recovery is never silent: it is reported as
- *   a warning naming the expected file and the likely cause (something
+ * - Recovery: candidates are validated newest-first — the target file must
+ *   exist AND its frontmatter `messages` count must cover the messages
+ *   already saved for this branch (a count that exceeds it is fine — a
+ *   descendant branch extended the same file); the first candidate that
+ *   passes is continued. If the newest candidate fails but an older one
+ *   validates, the save downgrades to the older file and warns about it
+ *   (converging on existing files instead of minting new ones). Only when
+ *   every candidate fails — deleted files, or files rewritten from a
+ *   different tree position (e.g. /tree navigation plus a save on an older
+ *   branch), where continuing could silently strand this branch's newer
+ *   messages — is a brand-new file with the full current branch written.
+ *   Recoveries and downgrades are never silent: each is reported as a
+ *   warning naming the failed target and the likely cause (something
  *   moving/deleting files for a missing target; a concurrent runtime or an
  *   older extension version for a count mismatch). Every branch therefore
  *   always ends up with a complete, consistent file.
@@ -86,7 +93,7 @@
  * and reports the file path.
  *
  * Installation:
- *   pi install npm:auto-save-to-markdown
+ *   pi install npm:pi-auto-save-to-markdown
  *
  * Debug:
  *   PI_CLAUDIAN_DEBUG=1 pi
@@ -693,6 +700,25 @@ export default function (pi: ExtensionAPI) {
     recoveryReason: string | null;
   }
 
+  /** One on-path save state ranked for the continuation candidate chain. */
+  interface StateCandidate {
+    state: SaveState;
+    /** Index of the state's lastSavedEntryId on the current path. */
+    pos: number;
+    /** Scan order (append order = record order); the later record wins ties. */
+    order: number;
+  }
+
+  /** Pre-resolution save decision: everything needed to rank and validate candidates. */
+  interface SavePlanInput {
+    dir: string;
+    pathMessages: SessionMessageEntry[];
+    /** entryId → index in the current path, for candidate positions and appends. */
+    pos: Map<string, number>;
+    /** On-path candidates ranked by position desc, then record order desc. */
+    candidates: StateCandidate[];
+  }
+
   function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
     return e.type === "message";
   }
@@ -740,27 +766,72 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
+   * Read every save-state entry of this session straight from the session
+   * jsonl on disk. The append log is the single source of truth shared by all
+   * runtimes, so a warm process whose in-memory tree lags behind still sees
+   * states recorded by other runtimes — the stale-tree incident's root cause.
+   * The full file is read once per save and each line passes a substring
+   * pre-check before JSON.parse (grep level: only the handful of matching
+   * lines are parsed), and corrupt / mid-write lines are skipped so a
+   * concurrent append cannot poison the scan. Returns null when the disk
+   * state is unavailable (no session file yet, or unreadable) — callers then
+   * fall back to the in-memory tree scan.
+   */
+  async function readDiskSaveStates(sessionFile: string | null): Promise<SaveState[] | null> {
+    if (!sessionFile) return null;
+    let text: string;
+    try {
+      text = await fs.readFile(sessionFile, "utf-8");
+    } catch (e) {
+      debug("cannot read session file for state discovery — falling back to memory:", String(e));
+      return null;
+    }
+    const started = Date.now();
+    const states: SaveState[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.includes(CUSTOM_TYPE)) continue;
+      let entry: { type?: unknown; customType?: unknown; data?: unknown };
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue; // skip corrupt / mid-write lines
+      }
+      if (entry.type === "custom" && entry.customType === CUSTOM_TYPE && isSaveState(entry.data)) {
+        states.push(entry.data as SaveState);
+      }
+    }
+    debug("disk state scan:", states.length, "states in", Date.now() - started, "ms");
+    return states;
+  }
+
+  /**
    * Decide which file the current branch belongs to and what to write.
    *
    * Every save appends a custom entry recording {branchKey, lastSavedEntryId,
    * file, schema}. Those entries live in the session tree, so a branch's own
    * latest state is always recoverable — including after resume, /tree
-   * navigation, or /fork. The file to continue is the one whose most recent
-   * saved position is the deepest entry still on the current root→leaf path;
-   * when the tree moved (navigation + re-ask), no position matches and a new
-   * file starts.
+   * navigation, or /fork. State discovery is disk-first (see
+   * readDiskSaveStates); the in-memory tree is only a fallback when the
+   * session file is unavailable.
    *
-   * ALL recorded states are considered when picking that position — keeping
-   * only the latest state per file could shadow an on-path state with one
-   * recorded on a different branch, forcing needless new files.
+   * ALL recorded states are considered — keeping only the latest state per
+   * file could shadow an on-path state with one recorded on a different
+   * branch, forcing needless new files. Every state whose saved position
+   * still lies on the current root→leaf path becomes a continuation
+   * candidate, ranked deepest position first. Ties on position (several
+   * states recording the same lastSavedEntryId with different files — after
+   * a loss recovery, a title rename) go to the state recorded LAST: scan
+   * order is append order, and the newest record names the file the latest
+   * successful save actually wrote, while older ones name superseded or dead
+   * files. When the tree moved (navigation + re-ask), no position matches and
+   * resolvePlan starts a new file.
    *
-   * Ties on that deepest position (several states recording the same
-   * lastSavedEntryId with different files — after a loss recovery, a title
-   * rename) go to the state recorded LAST: entry order is append order, and
-   * the newest record names the file the latest successful save actually
-   * wrote, while older ones name superseded or dead files.
+   * Positions are resolved against THIS process's view of the current path:
+   * a state recorded by another runtime on a genuinely diverged branch never
+   * matches, so it correctly does not take over this branch's file (one
+   * branch, one file).
    */
-  function computePlan(ctx: ExtensionContext): SavePlan | null {
+  async function computePlan(ctx: ExtensionContext): Promise<SavePlanInput | null> {
     const pathEntries = ctx.sessionManager.getBranch();
     const pathMessages = pathEntries.filter(isMessageEntry);
     if (pathMessages.length === 0) return null;
@@ -768,45 +839,30 @@ export default function (pi: ExtensionAPI) {
     const pos = new Map<string, number>();
     pathEntries.forEach((e, i) => pos.set(e.id, i));
 
-    let bestState: SaveState | null = null;
-    let bestPos = -1;
-    for (const e of ctx.sessionManager.getEntries()) {
-      if (e.type !== "custom" || e.customType !== CUSTOM_TYPE || !isSaveState(e.data)) continue;
-      const st = e.data;
+    let states = await readDiskSaveStates(ctx.sessionManager.getSessionFile() ?? null);
+    if (states === null) {
+      states = [];
+      for (const e of ctx.sessionManager.getEntries()) {
+        if (e.type !== "custom" || e.customType !== CUSTOM_TYPE || !isSaveState(e.data)) continue;
+        states.push(e.data);
+      }
+      debug("disk state unavailable — in-memory scan found", states.length, "states");
+    }
+
+    const candidates: StateCandidate[] = [];
+    let order = 0;
+    for (const st of states) {
       if (st.schema && isNewerSchemaVersion(st.schema, SAVE_STATE_SCHEMA)) {
         warnMixedVersions(ctx, st);
       }
       if (!st.lastSavedEntryId) continue;
       const p = pos.get(st.lastSavedEntryId);
-      if (p === undefined || p < bestPos) continue;
-      bestPos = p;
-      bestState = st;
+      if (p === undefined) continue;
+      candidates.push({ state: st, pos: p, order: order++ });
     }
+    candidates.sort((a, b) => b.pos - a.pos || b.order - a.order);
 
-    const dir = targetDir(ctx);
-    if (bestState) {
-      const appendEntries = pathMessages.filter((e) => (pos.get(e.id) ?? -1) > bestPos);
-      debug(
-        "continuing branch file:",
-        bestState.file,
-        "saved-up-to:",
-        bestState.lastSavedEntryId,
-        "new entries:",
-        appendEntries.length,
-      );
-      return {
-        dir,
-        filename: bestState.file,
-        branchKey: bestState.branchKey,
-        fullCreate: false,
-        appendEntries,
-        pathMessages,
-        state: bestState,
-        recoveryReason: null,
-      };
-    }
-
-    return freshFilePlan(ctx, dir, pathMessages);
+    return { dir: targetDir(ctx), pathMessages, pos, candidates };
   }
 
   // ---------- writing ----------
@@ -825,60 +881,128 @@ export default function (pi: ExtensionAPI) {
   }
 
   /**
-   * Verify a continuation plan against the file on disk. A continuation is
-   * only kept when the target file exists AND its frontmatter `messages`
-   * count matches the messages already saved for this branch (path messages
-   * minus the ones about to be appended). Otherwise the file was removed, or
-   * holds a different branch's snapshot (e.g. it was recreated from an older
-   * tree position after /tree navigation) — continuing or recreating it in
-   * place could silently strand this branch's newer messages, so a brand-new
-   * file with the full current branch is written instead. A target going
-   * missing is abnormal (something external moved or deleted it) and a count
-   * mismatch usually means another runtime or an older extension version
-   * rewrote the file concurrently, so each fallback records a
-   * recoveryReason that the callers surface as a warning — recovery must
-   * never be silent.
+   * Pick the continuation from the ranked candidates: validate each
+   * newest-first — the target file must exist AND its frontmatter `messages`
+   * count must cover the messages already saved for this branch (path
+   * messages minus the ones about to be appended; a count that exceeds it
+   * is fine — a descendant branch extended the same file) — and keep the
+   * FIRST candidate that passes.
+   *
+   * When the newest candidate fails but an older one validates, the save
+   * downgrades to the older file and a recoveryReason warns about it: the
+   * newest target failing is the anomaly worth surfacing (an external tool
+   * moving files, or a concurrent rewrite), and silently converging onto the
+   * older file would hide it. Only when EVERY candidate fails — deleted
+   * files, or files rewritten from a different tree position (e.g. /tree
+   * navigation plus a save on an older branch), where continuing could
+   * silently strand this branch's newer messages — is a brand-new file with
+   * the full current branch written, with a warning naming the newest target
+   * and its failure. Both missing-target and count-mismatch failures are
+   * distinguished in the warning text, since they point at different
+   * causes (something moving/deleting files vs. a concurrent runtime or an
+   * older extension version). No cap on the candidate walk: the usual case
+   * passes on the first candidate (one read); the worst case is one read per
+   * candidate, and cutting the chain short would break the
+   * "fresh file only when everything failed" semantics.
    */
-  async function resolvePlan(ctx: ExtensionContext, plan: SavePlan): Promise<SavePlan> {
-    if (plan.fullCreate) return plan;
-    const filePath = path.join(plan.dir, plan.filename);
-    const exists = await fs
-      .access(filePath)
-      .then(() => true)
-      .catch(() => false);
-    if (!exists) {
-      debug("continuation target missing — starting a fresh file:", plan.filename);
-      const fresh = freshFilePlan(ctx, plan.dir, plan.pathMessages);
-      fresh.recoveryReason =
-        `target file "${plan.filename}" is missing on disk — the full branch was saved to a fresh file instead; ` +
-        "check whether an external tool is moving or deleting files in the archive directory";
-      return fresh;
+  async function resolvePlan(ctx: ExtensionContext, input: SavePlanInput): Promise<SavePlan> {
+    if (input.candidates.length === 0) {
+      return freshFilePlan(ctx, input.dir, input.pathMessages);
     }
-    const existing = await fs.readFile(filePath, "utf-8");
-    const saved = parseMessageCount(existing);
-    const expected = plan.pathMessages.length - plan.appendEntries.length;
-    // The file holds this branch's prefix plus possibly a descendant branch's
-    // extra messages (saved > expected with nothing new to append): that is
-    // fine to keep. Missing messages (saved < expected, or none readable),
-    // or extra messages that new appends would interleave with, are not —
-    // both would silently strand messages, so start a fresh file instead.
-    if (saved === null || saved < expected || (saved > expected && plan.appendEntries.length > 0)) {
+
+    // Failure of the newest candidate, recorded once for the downgrade /
+    // fresh-file warnings: the newest target is the anomaly, later failures
+    // only explain why the chain kept walking.
+    let topFailure: {
+      kind: "missing" | "count";
+      file: string;
+      saved: number | null;
+      expected: number;
+    } | null = null;
+
+    for (let i = 0; i < input.candidates.length; i++) {
+      const c = input.candidates[i];
+      const appendEntries = input.pathMessages.filter((e) => (input.pos.get(e.id) ?? -1) > c.pos);
+      const expected = input.pathMessages.length - appendEntries.length;
+      const filePath = path.join(input.dir, c.state.file);
+      const exists = await fs
+        .access(filePath)
+        .then(() => true)
+        .catch(() => false);
+      if (!exists) {
+        debug("candidate #" + (i + 1), "missing on disk:", c.state.file);
+        if (!topFailure) {
+          topFailure = { kind: "missing", file: c.state.file, saved: null, expected };
+        }
+        continue;
+      }
+      const existing = await fs.readFile(filePath, "utf-8");
+      const saved = parseMessageCount(existing);
+      // The file holds this branch's prefix plus possibly a descendant
+      // branch's extra messages (saved > expected with nothing new to
+      // append): that is fine to keep. Missing messages (saved < expected,
+      // or none readable), or extra messages that new appends would
+      // interleave with, are not — both would silently strand messages.
+      if (saved === null || saved < expected || (saved > expected && appendEntries.length > 0)) {
+        debug(
+          "candidate #" + (i + 1),
+          "out of sync (messages:",
+          saved,
+          "expected:",
+          expected,
+          "):",
+          c.state.file,
+        );
+        if (!topFailure) {
+          topFailure = { kind: "count", file: c.state.file, saved, expected };
+        }
+        continue;
+      }
       debug(
-        "continuation target out of sync (messages:",
-        saved,
-        "expected:",
-        expected,
-        ") — starting a fresh file:",
-        plan.filename,
+        "continuing branch file:",
+        c.state.file,
+        "saved-up-to:",
+        c.state.lastSavedEntryId,
+        "new entries:",
+        appendEntries.length,
+        "(candidate #" + (i + 1) + " of " + input.candidates.length + ")",
       );
-      const fresh = freshFilePlan(ctx, plan.dir, plan.pathMessages);
-      fresh.recoveryReason =
-        `target file "${plan.filename}" no longer matches this branch's saved messages ` +
-        `(file holds ${saved ?? "no readable count"}, expected ${expected}) — the full branch was saved to a fresh file instead; ` +
-        "this usually means another runtime or an older extension version rewrote it";
-      return fresh;
+      return {
+        dir: input.dir,
+        filename: c.state.file,
+        branchKey: c.state.branchKey,
+        fullCreate: false,
+        appendEntries,
+        pathMessages: input.pathMessages,
+        state: c.state,
+        recoveryReason:
+          topFailure === null
+            ? null
+            : topFailure.kind === "missing"
+              ? `latest saved file "${topFailure.file}" is missing on disk — ` +
+                `fell back to continuing "${c.state.file}" instead; ` +
+                "check whether an external tool is moving or deleting files in the archive directory"
+              : `latest saved file "${topFailure.file}" no longer matches this branch's saved messages ` +
+                `(file holds ${topFailure.saved ?? "no readable count"}, expected ${topFailure.expected}) — ` +
+                `fell back to continuing "${c.state.file}" instead; ` +
+                "this usually means another runtime or an older extension version rewrote it",
+      };
     }
-    return plan;
+
+    // Every candidate failed: fresh full-branch file, warning names the
+    // newest target and its failure (both texts kept from the single-state
+    // era — same causes, same wording).
+    const fresh = freshFilePlan(ctx, input.dir, input.pathMessages);
+    fresh.recoveryReason =
+      topFailure === null
+        ? null
+        : topFailure.kind === "missing"
+          ? `target file "${topFailure.file}" is missing on disk — the full branch was saved to a fresh file instead; ` +
+            "check whether an external tool is moving or deleting files in the archive directory"
+          : `target file "${topFailure.file}" no longer matches this branch's saved messages ` +
+            `(file holds ${topFailure.saved ?? "no readable count"}, expected ${topFailure.expected}) — the full branch was saved to a fresh file instead; ` +
+            "this usually means another runtime or an older extension version rewrote it";
+    return fresh;
   }
 
   async function saveConversation(ctx: ExtensionContext, plan: SavePlan): Promise<SaveResult> {
@@ -908,7 +1032,9 @@ export default function (pi: ExtensionAPI) {
         wrote: false,
         created: false,
         file: filePath,
-        recovered: null,
+        // A downgrade warning (candidate chain fell back to this file) must
+        // surface even when there is nothing new to append.
+        recovered: plan.recoveryReason,
       };
     }
 
@@ -936,7 +1062,9 @@ export default function (pi: ExtensionAPI) {
       wrote: true,
       created: false,
       file: filePath,
-      recovered: null,
+      // A downgrade warning (candidate chain fell back to this file) must
+      // surface on the append that performed the downgrade.
+      recovered: plan.recoveryReason,
     };
   }
 
@@ -968,8 +1096,8 @@ export default function (pi: ExtensionAPI) {
 
   /** Full save cycle: write the file, then persist the branch state entry. */
   async function runSave(ctx: ExtensionContext): Promise<SaveResult> {
-    let plan = computePlan(ctx);
-    if (!plan) {
+    const input = await computePlan(ctx);
+    if (!input) {
       return {
         message: "no conversation content to save yet",
         wrote: false,
@@ -978,7 +1106,7 @@ export default function (pi: ExtensionAPI) {
         recovered: null,
       };
     }
-    plan = await resolvePlan(ctx, plan);
+    const plan = await resolvePlan(ctx, input);
     const result = await saveConversation(ctx, plan);
     if (result.wrote) {
       const leafId = ctx.sessionManager.getLeafId();
@@ -1009,7 +1137,7 @@ export default function (pi: ExtensionAPI) {
   // 2. Manual: force a save now and report where it went.
   pi.registerCommand(COMMAND, {
     description:
-      "Save the current conversation branch to a markdown file now (auto-save-to-markdown)",
+      "Save the current conversation branch to a markdown file now (pi-auto-save-to-markdown)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /" + COMMAND + " invoked");

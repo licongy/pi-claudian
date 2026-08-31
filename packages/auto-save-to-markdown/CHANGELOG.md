@@ -1,4 +1,4 @@
-# auto-save-to-markdown
+# pi-auto-save-to-markdown
 
 ## 0.4.0
 

@@ -18,11 +18,11 @@ pi install npm:<package-name>
 
 ## Extensions
 
-| Package                                                   | Description                                                                                                                                                                |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@pi-claudian/sync-title`](packages/sync-title)          | Sync Claudian conversation titles into Pi session names so they appear in `/resume`.                                                                                       |
-| [`@pi-claudian/sync-session`](packages/sync-session)      | Sync Pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.                                                                               |
-| [`auto-save-to-markdown`](packages/auto-save-to-markdown) | Auto-save every completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch. Not Claudian-specific — works with any Pi session. |
+| Package                                                      | Description                                                                                                                                                                |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@pi-claudian/sync-title`](packages/sync-title)             | Sync Claudian conversation titles into Pi session names so they appear in `/resume`.                                                                                       |
+| [`@pi-claudian/sync-session`](packages/sync-session)         | Sync Pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.                                                                               |
+| [`pi-auto-save-to-markdown`](packages/auto-save-to-markdown) | Auto-save every completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch. Not Claudian-specific — works with any Pi session. |
 
 ## Development
 

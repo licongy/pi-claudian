@@ -1,5 +1,5 @@
 {
-  "name": "auto-save-to-markdown",
+  "name": "pi-auto-save-to-markdown",
   "version": "0.4.0",
   "description": "Pi extension that automatically saves each completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch.",
   "type": "module",
