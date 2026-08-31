@@ -1,5 +1,19 @@
 # pi-auto-save-to-markdown
 
+## 0.5.0
+
+### Minor Changes
+
+- 1c6931f: Read save-state entries straight from the session jsonl on disk instead of the in-memory session tree, falling back to the in-memory scan only when the file is unavailable. A warm process whose in-memory tree lags behind other runtimes (e.g. Pi processes kept alive across an extension upgrade) now still finds states those runtimes recorded, so it continues their file instead of silently rewriting a full copy under a superseded filename — the stale-tree incident's root cause. Parsing is grep-level: the file is read once per save, lines are substring-prefiltered before `JSON.parse`, and corrupt/mid-write lines are skipped.
+
+  Continue-branch resolution now walks a ranked candidate chain: every recorded state whose saved position lies on the current branch is validated newest-first (file exists + frontmatter `messages` count covers the saved position) and the first passing candidate is continued. When the newest candidate fails but an older one validates, the save downgrades to the older file and warns, distinguishing a missing target (external tool moving files) from a count mismatch (concurrent runtime / older extension version) like the recovery warning does; only when every candidate fails is a fresh full file written. This converges repeated recoveries onto existing files instead of minting new ones.
+
+### Patch Changes
+
+- 39b67c1: Fix branch-state tie-breaking so the most recently recorded save wins when several state entries point at the same tree position: after a lost-file recovery this stops re-selecting the dead filename, which caused repeated full rewrites and extra files. Recoveries are no longer silent — when a continuation target is missing on disk or no longer matches the branch's saved messages, a warning names the expected file and the likely cause (an external tool moving files, or a concurrent runtime / older extension version rewriting it). State entries now record a save-state schema version ("MAJOR.MINOR", independent of the package version) and the writer's package version; when a save sees entries from a newer schema — a warm process still running pre-upgrade code after the package was updated — it warns once per session to restart.
+- 1c6931f: Rename the package from `auto-save-to-markdown` to `pi-auto-save-to-markdown`, following the Pi community's `pi-` prefix convention for unscoped extension packages. Install with `pi install npm:pi-auto-save-to-markdown`; the previous unscoped name is deprecated.
+- 39b67c1: Add an `agent` field to the saved markdown frontmatter identifying the file's generator. This extension only runs inside Pi, so the value is always `"pi"`; the field is reserved so future extensions for other agents can maintain their own value. On appends the field is preserved from the file being continued (creator semantics, like `created`); files written before this change gain the field on their next append.
+
 ## 0.4.0
 
 ### Minor Changes
