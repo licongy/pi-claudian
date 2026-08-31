@@ -1,5 +1,19 @@
 # pi-auto-save-to-markdown
 
+## 0.6.0
+
+### Minor Changes
+
+- 60d2b3a: Rename files to the session's real title once it arrives (rename-on-title). The first save usually happens before a session has its name — Claudian generates the title only after the first reply — so the file is created with a slug of the first user message and the filename never reflected the real title. Once the session name exists, the next save renames the file to `<name>-<key>-<original-timestamp>.md` (keeping the creation timestamp: birthday semantics, and a deterministic target so concurrent or retried renames converge on one name), rewrites the frontmatter title and the document heading to match, and records the new name in the save state. One-way and one-time: a later `/name` change never re-renames, and legacy files (save states predating the `titled` flag) are only renamed when their name segment matches the recomputed fallback slug, so manually organized filenames stay untouched. A rename never overwrites an existing target (`-1`, `-2` … suffixes); a failed rename keeps the old filename and retries on the next save. Save-state schema bumped to 1.1 with the optional `titled` flag; older entries remain readable.
+- c5b7e21: Record the document format version in the frontmatter. Every write stamps `format_version: "1.0"` — the version of the format of the LAST write, so an appended file carries the current value even when blocks inside predate it, and "claimed version vs the block formats actually present" can detect mixed-era files. MAJOR bumps mark structural breaks a parser or migration tool must handle (message header structure, `---` separators, callout syntax); MINOR bumps mark parse-invariant tweaks and bugfixes; additive frontmatter fields never bump it. Implemented independently of the planned save-doctor tool: the stamp's value as a migration handle accrues with every file written, so it starts now.
+- c5b7e21: Key the archive filename by the session instead of the branch tip. The `<key>` segment of `<title>-<key>-<time>.md` is now the first 8 hex of the SHA-256 of the session id, so every file of one session shares it — a session's files cluster in the archive directory across recoveries and resumes instead of drifting apart (the old key was a snapshot of the branch tip at file creation, which changed on every loss recovery and identified nothing stable). Save-state entries keep the `branchKey` field with this new meaning; existing files are untouched, since state entries address files by their full recorded name.
+
+  Branch switches are now reported too: when `/tree` navigation starts a new branch, the save notifies (info) that a new branch file was created and which earlier branch file is kept on disk, so multiple files of one session stay navigable.
+
+### Patch Changes
+
+- c5b7e21: Never overwrite when creating a fresh archive file. Fresh full saves used the same tmp+rename write as appends, which silently replaces an existing file: two runtimes recovering the same lost file in the same second mint the same filename and overwrite each other without a trace. A fresh save now claims a free filename first, falling back to `-1`, `-2` … suffixes (the same guard rename-on-title already had), and the rename-on-title filename parser tolerates the suffixes so a suffixed file still gets renamed.
+
 ## 0.5.0
 
 ### Minor Changes
