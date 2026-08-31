@@ -57,7 +57,7 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 文件名：`<标题>-<key>-<时间>.md`
 
 - `<标题>` — 会话名称（`/name`）；未命名时取第一条用户消息的摘要
-- `<key>` — session id 的 SHA-256 前 8 位十六进制：同一会话的所有文件相同，恢复、重启后仍天然聚簇（旧版创建的文件为建文件时分支上最深一条消息的 entry id）
+- `<key>` — session id 的 SHA-256 前 8 位十六进制：同一会话的所有文件相同，恢复、重启后仍天然聚簇（session id 尚不存在时，改以同样方式哈希分支上最深一条消息的 entry id——key 始终是 8 位十六进制的不透明聚簇键）
 - `<时间>` — 建文件的本地时间，格式 `YYYYMMDD-HHmmss`
 
 会话的真实名称在建文件之后才到达时（如 Claudian 在首轮回复后才生成标题），下一次保存会把文件一次性改名为 `<名称>-<key>-<原时间戳>.md`（保留原创建时间戳），并同步改写 frontmatter 标题与正文标题。改名至多发生一次：之后的 `/name` 改名不再影响文件名，手动整理过的文件名也不会被动。
@@ -66,9 +66,10 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 ---
 title: "修复登录重定向死循环"
 agent: "pi"
-format_version: "1.0"
+format_version: "1.1"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
-tree: "c2088d77"
+session_key: "c2088d77"
+last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
 model: "z-ai/glm-5.3"
 provider: "openrouter"
 cost: 0.023401

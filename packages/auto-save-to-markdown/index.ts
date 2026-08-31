@@ -17,17 +17,19 @@
  *   (or a slug of the first user message when unnamed), <key> is the first
  *   8 hex of the SHA-256 of the session id (the same value for every file
  *   of one session, so a session's files cluster in the archive directory
- *   across recoveries and resumes; files created before this scheme carry
- *   the 8-hex id of the deepest message entry at their creation), and
+ *   across recoveries and resumes; when no session id exists yet — the
+ *   degenerate fallback — the deepest message entry's id is hashed the
+ *   same way, so the key is always an opaque 8-hex cluster key), and
  *   <time> is the local file-creation timestamp (YYYYMMDD-HHmmss).
  * - Frontmatter: title, agent (generator identity, always "pi" here — agent
  *   plugins for other runtimes would write their own value), format_version
  *   (the document format of the last write — additive frontmatter fields
- *   never bump it; see FORMAT_VERSION), session id, tree (the filename
- *   key — the session-id hash for new files, the legacy branch-tip id for
- *   files created before it), model, provider, cumulative cost and tokens
- *   (input, output, cache read/write), message count, created/updated
- *   timestamps, project root and session file.
+ *   never bump it; see FORMAT_VERSION), session id, session key (the
+ *   filename key), last entry id (the id of the deepest message entry on the
+ *   saved branch — the file's position in the session jsonl tree at the last
+ *   write), model, provider, cumulative cost and tokens (input, output,
+ *   cache read/write), message count, created/updated timestamps, project
+ *   root and session file.
  * - Body format: every message block opens with a setext-H1 info header
  *   (`User <span …>YYYY-MM-DD HH:MM:SS</span>` /
  *   `Assistant <span …>YYYY-MM-DD HH:MM:SS · model</span>`, where the span
@@ -177,7 +179,7 @@ const AGENT = "pi";
  * Bump MINOR when adding optional state fields, MAJOR when changing existing
  * state semantics.
  */
-const SAVE_STATE_SCHEMA = "1.1";
+const SAVE_STATE_SCHEMA = "1.2";
 
 /**
  * Version of the markdown document format this code writes ("MAJOR.MINOR",
@@ -191,7 +193,7 @@ const SAVE_STATE_SCHEMA = "1.1";
  * transforms like the thinking repair); additive frontmatter fields do NOT
  * bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.0";
+const FORMAT_VERSION = "1.1";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -231,14 +233,21 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
  */
 interface SaveState {
   /**
-   * Key segment of the filename this state addresses. Entries written since
-   * the session-hash scheme record the first 8 hex of the SHA-256 of the
-   * session id (stable per session); legacy entries carry the 8-hex id of the
-   * deepest message entry at file creation. Only ever used as the recorded
+   * Key segment of the filename this state addresses: the first 8 hex of the
+   * SHA-256 of the session id — stable per session, so files of one session
+   * cluster together (when no session id exists yet, the deepest message
+   * entry's id is hashed the same way). Only ever used as the recorded
    * value — files are addressed by their full recorded name, never recomputed
-   * from the key.
+   * from the key. Renamed from branchKey at schema 1.2: legacy entries fail
+   * validation and are ignored — those branches get fresh files.
    */
-  branchKey: string;
+  sessionKey: string;
+  /**
+   * Id of the session tree leaf at save time (getLeafId()) — may be a custom
+   * state entry rather than a message; used to rank continuation candidates
+   * on the current path. Distinct from frontmatter `last_entry_id`, which is
+   * the deepest message entry (an id actually present in the file).
+   */
   lastSavedEntryId: string | null;
   file: string;
   /** Save-state schema version ("MAJOR.MINOR") of the writer. */
@@ -277,8 +286,8 @@ function isSaveState(v: unknown): v is SaveState {
   if (typeof v !== "object" || v === null) return false;
   const s = v as Record<string, unknown>;
   return (
-    typeof s.branchKey === "string" &&
-    s.branchKey.length > 0 &&
+    typeof s.sessionKey === "string" &&
+    s.sessionKey.length > 0 &&
     (s.lastSavedEntryId === null || typeof s.lastSavedEntryId === "string") &&
     typeof s.file === "string" &&
     s.file.length > 0
@@ -366,7 +375,20 @@ interface BranchMeta {
   agent: string;
   sessionId: string | null;
   sessionFile: string | null;
-  tree: string;
+  /**
+   * The filename key, mirrored into the frontmatter so the file is
+   * self-describing (field name `session_key`): the first 8 hex of the
+   * SHA-256 of the session id, or of the deepest message entry's id when
+   * no session id exists yet. A display/grouping key only — never used to
+   * address files (states record full filenames).
+   */
+  sessionKey: string;
+  /**
+   * Id of the deepest message entry on the saved branch at the last write
+   * (field name `last_entry_id`) — the file's exact position in the
+   * session jsonl tree. Updated on every append, like `updated`.
+   */
+  lastEntryId: string;
   model: string | null;
   provider: string | null;
   cost: number;
@@ -584,7 +606,7 @@ class DiskSessionView implements SaveContext {
     // _persist does; a concurrent writer interleaves at line granularity
     // at worst, and every reader skips bad lines.
     await fs.appendFile(this.file, JSON.stringify(entry) + "\n", "utf-8");
-    debug(this.tag(), "recorded state entry — branchKey:", state.branchKey, "file:", state.file);
+    debug(this.tag(), "recorded state entry — sessionKey:", state.sessionKey, "file:", state.file);
   }
 
   /** pi's generateId semantics: random 8-hex, collision-checked against the session's ids. */
@@ -1039,7 +1061,8 @@ export default function (pi: ExtensionAPI) {
     lines.push(`agent: ${yamlQuote(meta.agent)}`);
     lines.push(`format_version: ${yamlQuote(FORMAT_VERSION)}`);
     if (meta.sessionId) lines.push(`session_id: ${yamlQuote(meta.sessionId)}`);
-    lines.push(`tree: ${yamlQuote(meta.tree)}`);
+    lines.push(`session_key: ${yamlQuote(meta.sessionKey)}`);
+    lines.push(`last_entry_id: ${yamlQuote(meta.lastEntryId)}`);
     if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
     if (meta.provider) lines.push(`provider: ${yamlQuote(meta.provider)}`);
     lines.push(`cost: ${meta.cost.toFixed(6)}`);
@@ -1086,7 +1109,7 @@ export default function (pi: ExtensionAPI) {
   function computeMeta(
     ctx: SaveContext,
     pathMessages: SessionMessageEntry[],
-    branchKey: string,
+    sessionKey: string,
     created: string | undefined,
     agent: string | undefined,
   ): BranchMeta {
@@ -1118,7 +1141,8 @@ export default function (pi: ExtensionAPI) {
       agent: agent ?? AGENT,
       sessionId: ctx.session.getSessionId(),
       sessionFile: ctx.session.getSessionFile() ?? null,
-      tree: branchKey,
+      sessionKey,
+      lastEntryId: pathMessages[pathMessages.length - 1].id,
       model,
       provider,
       cost,
@@ -1138,7 +1162,7 @@ export default function (pi: ExtensionAPI) {
   interface SavePlan {
     dir: string;
     filename: string;
-    branchKey: string;
+    sessionKey: string;
     /** Write the full branch content (new branch, or target file missing). */
     fullCreate: boolean;
     /** Entries to append when continuing an existing file. */
@@ -1203,19 +1227,22 @@ export default function (pi: ExtensionAPI) {
     // of the session id — stable per session, so every file of one session
     // clusters together across recoveries and resumes. Never truncate the id
     // itself: pi session ids are uuidv7 whose leading hex is a millisecond
-    // timestamp, so same-month sessions share long prefixes. The tip snapshot
-    // is only a degenerate fallback (no session id yet).
+    // timestamp, so same-month sessions share long prefixes. When no session
+    // id exists yet — the degenerate fallback — the deepest message entry's
+    // id is hashed the same way, so the key is always an opaque 8-hex cluster
+    // key, never a raw entry id.
     const sessionId = ctx.session.getSessionId();
-    const branchKey = sessionId
-      ? createHash("sha256").update(sessionId).digest("hex").slice(0, 8)
-      : pathMessages[pathMessages.length - 1].id;
+    const sessionKey = createHash("sha256")
+      .update(sessionId ?? pathMessages[pathMessages.length - 1].id)
+      .digest("hex")
+      .slice(0, 8);
     const title = titleForFilename(ctx, firstUserText(pathMessages));
-    const filename = `${title}-${branchKey}-${fileTimestamp(new Date())}.md`;
-    debug("new branch file:", filename, "branchKey:", branchKey);
+    const filename = `${title}-${sessionKey}-${fileTimestamp(new Date())}.md`;
+    debug("new branch file:", filename, "sessionKey:", sessionKey);
     return {
       dir,
       filename,
-      branchKey,
+      sessionKey,
       fullCreate: true,
       appendEntries: [],
       pathMessages,
@@ -1272,7 +1299,7 @@ export default function (pi: ExtensionAPI) {
   /**
    * Decide which file the current branch belongs to and what to write.
    *
-   * Every save appends a custom entry recording {branchKey, lastSavedEntryId,
+   * Every save appends a custom entry recording {sessionKey, lastSavedEntryId,
    * file, schema}. Those entries live in the session tree, so a branch's own
    * latest state is always recoverable — including after resume, /tree
    * navigation, or /fork. State discovery is disk-first (see
@@ -1429,7 +1456,7 @@ export default function (pi: ExtensionAPI) {
     state: SaveState,
     pathMessages: SessionMessageEntry[],
   ): { renameTo: string | null; titled: boolean } {
-    const keySuffix = "-" + state.branchKey;
+    const keySuffix = "-" + state.sessionKey;
     // The trailing group tolerates (and drops) the -1, -2 … suffixes that
     // claimFilename may have added, so a suffixed file keeps its rename
     // eligibility; the suffix is not carried into the deterministic target.
@@ -1457,7 +1484,7 @@ export default function (pi: ExtensionAPI) {
     if (!newTitle || !ts || titleSegment === null || newTitle === titleSegment) {
       return { renameTo: null, titled: false };
     }
-    const renameTo = `${newTitle}-${state.branchKey}-${ts}.md`;
+    const renameTo = `${newTitle}-${state.sessionKey}-${ts}.md`;
     debug("rename-on-title planned:", state.file, "→", renameTo);
     return { renameTo, titled: false };
   }
@@ -1559,7 +1586,7 @@ export default function (pi: ExtensionAPI) {
       return {
         dir: input.dir,
         filename: c.state.file,
-        branchKey: c.state.branchKey,
+        sessionKey: c.state.sessionKey,
         fullCreate: false,
         appendEntries,
         pathMessages: input.pathMessages,
@@ -1614,7 +1641,7 @@ export default function (pi: ExtensionAPI) {
       }
       plan.filename = claimed;
       const target = path.join(plan.dir, plan.filename);
-      const meta = computeMeta(ctx, plan.pathMessages, plan.branchKey, undefined, undefined);
+      const meta = computeMeta(ctx, plan.pathMessages, plan.sessionKey, undefined, undefined);
       const body = renderEntries(plan.pathMessages); // ends with the trailing separator
       const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
       await atomicWrite(target, content);
@@ -1649,7 +1676,7 @@ export default function (pi: ExtensionAPI) {
     const meta = computeMeta(
       ctx,
       plan.pathMessages,
-      plan.branchKey,
+      plan.sessionKey,
       parseCreated(existing),
       parseAgent(existing),
     );
@@ -1757,14 +1784,14 @@ export default function (pi: ExtensionAPI) {
       await applyRename(ctx, plan, result);
       const leafId = ctx.session.getLeafId();
       await ctx.appendState({
-        branchKey: plan.branchKey,
+        sessionKey: plan.sessionKey,
         lastSavedEntryId: leafId,
         file: plan.filename,
         schema: SAVE_STATE_SCHEMA,
         extVersion: EXTENSION_VERSION ?? undefined,
         titled: plan.titled,
       });
-      debug("recorded state entry — branchKey:", plan.branchKey, "leaf:", leafId);
+      debug("recorded state entry — sessionKey:", plan.sessionKey, "leaf:", leafId);
     }
     return result;
   }

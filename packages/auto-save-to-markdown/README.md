@@ -76,8 +76,9 @@ Filename: `<title>-<key>-<time>.md`
   when the session is unnamed
 - `<key>` — the first 8 hex of the SHA-256 of the session id: every file of
   one session shares it, so a session's files cluster in the directory across
-  recoveries and resumes (files created by older versions carry the id of the
-  deepest message entry at file creation instead)
+  recoveries and resumes (when no session id exists yet — the degenerate
+  fallback — the deepest message entry's id is hashed the same way, so the
+  key is always an opaque 8-hex cluster key)
 - `<time>` — local file-creation time, `YYYYMMDD-HHmmss`
 
 When the session's real name arrives after the file was created (e.g.
@@ -91,9 +92,10 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.0"
+format_version: "1.1"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
-tree: "c2088d77"
+session_key: "c2088d77"
+last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
 model: "z-ai/glm-5.3"
 provider: "openrouter"
 cost: 0.023401
