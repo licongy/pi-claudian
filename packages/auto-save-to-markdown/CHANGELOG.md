@@ -1,5 +1,15 @@
 # pi-auto-save-to-markdown
 
+## 0.7.0
+
+### Minor Changes
+
+- 1263acd: Add `/save-conversation-all`: save every session of the current project in one command. Each session jsonl in the project's sessions folder is rebuilt from disk and saved through the exact same pipeline as the live one — ranked state candidates, the never-overwrite guard, rename-on-title, recovery warnings — with its archive written under that session's own working directory. Idempotent (re-runs continue or report "up to date"), skipping sessions without an assistant reply and pre-tree legacy files, and deferring sessions whose jsonl changes while being processed: the save only proceeds when the file is verified unchanged since it was read (the appended state line is byte-identical to what pi itself writes). The current session saves first through the normal live path; the batch reports a summary with per-session warnings tagged by session id.
+
+### Patch Changes
+
+- 1263acd: Fix rename-on-title's document-heading rewrite: the `# title` line was never actually rewritten, because the heading was located with a pattern anchored at the very first character after the frontmatter, while every file this extension writes has exactly one blank line between the frontmatter and the heading. The heading is now located as the first non-blank line after the frontmatter (a manually deleted heading still leaves the content untouched).
+
 ## 0.6.0
 
 ### Minor Changes
