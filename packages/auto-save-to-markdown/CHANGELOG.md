@@ -1,5 +1,11 @@
 # pi-auto-save-to-markdown
 
+## 0.7.1
+
+### Patch Changes
+
+- 5e14679: Rename the frontmatter `tree` field to `session_key`, add `last_entry_id`, and unify the key's format. The old name was ambiguous: in Pi's session jsonl "tree" ids are message entry ids, but the field's value is the filename key, which never matches a jsonl entry id. The renamed `session_key` keeps the file self-describing (frontmatter mirrors the filename key), and the degenerate no-session-id fallback now hashes the deepest message entry's id the same way, so the key is always an opaque 8-hex cluster key, never a raw entry id. The new `last_entry_id` records the id of the deepest message entry on the saved branch at the last write — the file's exact position in the session jsonl tree, updated on every append like `updated`, so the archived markdown anchors to a precise tree location without reading the session jsonl. Internally the save-state field `branchKey` is renamed to `sessionKey` to match (the value is per-session, shared across branches) — save-state schema bumped to 1.2; legacy state entries fail validation and are ignored, so ongoing sessions mint fresh files on their next save. Document format bumped to 1.1 (a field rename is a parse-invariant change, not an additive field).
+
 ## 0.7.0
 
 ### Minor Changes
