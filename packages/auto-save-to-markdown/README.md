@@ -158,6 +158,12 @@ remain a glance away. Each block ends with a `---` separator wrapped in single
 blank lines (extra blank lines are trimmed), so blocks are easy to tell apart
 both when reading and when splitting the file programmatically.
 
+A saved file rendered in Obsidian — the `<title>-<key>-<time>.md` filename on
+top, the frontmatter folded into the Properties panel, and the Thinking and
+Tool Calls callouts collapsed:
+
+![A saved conversation file rendered in Obsidian: filename in the title-key-time pattern, frontmatter folded into the Properties panel, message blocks with role headers and timestamps, and collapsed Thinking and Tool Calls callouts](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot.png)
+
 ### Fragmented thinking repair
 
 Some upstream reasoning streams (observed with z-ai/GLM via OpenRouter) store

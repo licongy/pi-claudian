@@ -127,6 +127,12 @@ Markdown 解析。
 醒目，细节又触手可及。每个消息块以"上下各一个空行"包裹的 `---` 分隔线结尾
 （多余空行会被裁剪），无论是阅读还是程序化切分，都能清楚地区分每个消息块。
 
+保存的文件在 Obsidian 中的渲染效果——顶部为 `<标题>-<key>-<时间>.md`
+文件名，frontmatter 折叠在 Properties 面板中，Thinking 与 Tool Calls
+两个 callout 处于折叠状态：
+
+![保存的对话文件在 Obsidian 中的渲染效果：文件名呈"标题-key-时间"格式，frontmatter 折叠在 Properties 面板中，消息块带角色信息头和时间戳，Thinking 与 Tool Calls callout 处于折叠状态](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot.png)
+
 ### 碎片化 thinking 修复
 
 部分上游推理流（在 z-ai/GLM 经 OpenRouter 的场景中观察到）会把 thinking
