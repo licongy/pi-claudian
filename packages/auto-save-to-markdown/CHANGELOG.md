@@ -1,5 +1,11 @@
 # pi-auto-save-to-markdown
 
+## 0.7.3
+
+### Patch Changes
+
+- 90d69ff: Fix two readability issues in the saved markdown. First, the document heading now sits directly after the frontmatter with no blank line between them (files previously always opened with one extra blank line before the `# title` heading); appends also heal the blank line that older versions wrote into existing files, so active sessions converge on the new layout. Second, the fragmented-thinking repair now preserves paragraph breaks instead of flattening the whole block: a separator run of 3+ newlines that follows a sentence-final character marks a real paragraph break about three times out of four in corrupted blocks (validated against every session of a real project — 70 corrupted blocks), so exactly those separators are restored to blank-line paragraphs while word-separator runs join into flowing text. A break is never inserted mid-sentence; worst case one lands between two complete sentences. Non-whitespace content is preserved byte-for-byte. Document format bumped to 1.2 (both changes are parse-invariant tweaks).
+
 ## 0.7.2
 
 ### Patch Changes
