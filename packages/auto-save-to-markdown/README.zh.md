@@ -66,7 +66,7 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 ---
 title: "修复登录重定向死循环"
 agent: "pi"
-format_version: "1.3"
+format_version: "1.4"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -91,6 +91,11 @@ User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:
 ===
 
 auth 重构之后登录页一直重定向死循环……
+
+> [!quote]- Editor Selection
+> **path**: [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
+>
+> export function middleware(request) { … }
 
 ---
 
@@ -119,6 +124,16 @@ Obsidian 对 HTML 块内嵌 Markdown 的渲染不可靠；在非 Obsidian 环境
 退化为普通引用块。结果与参数预览会包在 inline code 里（分隔符长度会自动
 压过内容中的反引号序列），工具的原始输出因此按字面渲染，不会被当作
 Markdown 解析。
+
+客户端或 agent 注入到用户消息中的提示块——编辑器当前选区、附加或引用的
+笔记、加载的 skill——会从原始 XML（Obsidian 无法渲染，只会显示成裸露的
+尖括号文本）重新渲染为通用 callout。不做任何逐块解析：标题取标记名的分词
+（`editor_selection` → Editor Selection），属性对以 `**属性**: 值` 行开头
+（形似 vault 相对笔记路径的 `path`/`location` 值会转为 Obsidian wikilink），
+随后是引用内容，折叠在 callout 中。用户提供的块（选区、笔记附件）保持
+可见；agent 侧痕迹（skill）渲染为单行标记，内容不再展示。未知标记原样
+保留，用户粘贴的 XML 内容绝不会被误改；回退文件名 slug 也从剥离全部
+已知块后的纯键入文本推导。
 
 每个消息块以 setext 一级信息头（`User`、`Assistant`，下一行以 `===` 下划）
 开头——高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题

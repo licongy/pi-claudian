@@ -92,7 +92,7 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.3"
+format_version: "1.4"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -117,6 +117,11 @@ User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:
 ===
 
 The login page redirects in a loop after the auth refactor...
+
+> [!quote]- Editor Selection
+> **path**: [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
+>
+> export function middleware(request) { … }
 
 ---
 
@@ -147,6 +152,20 @@ Obsidian the callouts degrade to plain blockquotes. Result and argument
 previews are wrapped in inline code spans (with a delimiter sized to survive
 backticks inside the content), so raw tool output renders literally instead of
 being parsed as markdown.
+
+Prompt blocks the client or the agent injects into a user message — the
+editor's active selection, attached or referenced notes, loaded skills — are
+re-rendered from their raw XML (which Obsidian cannot render and would show
+as literal angle-bracket text) into generic callouts. No block is parsed
+individually: the title is the tag name in words (`editor_selection` →
+Editor Selection), attribute pairs open the body as `**name**: value` lines
+(`path`/`location` values shaped like vault-relative note paths become
+Obsidian wikilinks), and the content follows, quoted in a collapsed callout.
+User-provided blocks (selections, note attachments) stay visible;
+agent-side traces (skills) render as a one-line marker with the content
+dropped. Unknown markup is left verbatim, so XML pasted as content is never
+mangled — and the fallback filename slug derives from the typed message
+with every known block stripped.
 
 Each message block opens with a setext level-1 info header (`User`,
 `Assistant`) underlined with `===` — one level above the `##` headings AI

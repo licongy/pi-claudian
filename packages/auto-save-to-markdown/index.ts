@@ -54,6 +54,22 @@
  *   of being parsed as markdown. A result whose call was saved in
  *   an earlier file (mid-turn manual save) falls back to a standalone
  *   one-line block.
+ * - Injected prompt blocks: the host client and the agent runtime append
+ *   machine-readable XML to user messages — the editor's active selection
+ *   (CDATA content), note references and attachments (linked_note /
+ *   linked_content), loaded skills, and their kin. Raw markup is noise
+ *   Obsidian cannot render (unknown tags are not HTML; CDATA is XML), so
+ *   every block in a known vocabulary is re-rendered generically (see
+ *   markdown.ts) — no per-tag formatting: the callout title is the tag name
+ *   in words, attribute pairs open the body as "**name**: value" lines
+ *   (path/location values shaped like vault-relative note paths become
+ *   wikilinks), and the content follows (the client's `]]>` split-escaping
+ *   reversed). User-provided blocks (selections, attachments) quote their
+ *   content in a collapsed `> [!quote]`; agent-side traces (skills) render
+ *   as a one-line `> [!note]` marker with the content dropped. Title
+ *   derivation strips every known block — the typed message is the title.
+ *   Unknown markup is left verbatim so XML pasted as content is never
+ *   mangled.
  * - Branching: each file records exactly ONE branch (the root→leaf path
  *   returned by sessionManager.getBranch()). State is persisted via
  *   `pi.appendEntry()` custom entries, which are part of the session tree
@@ -160,6 +176,7 @@ import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { debug } from "./debug.js";
+import { callout, inlineCode, renderUserMessageText, stripInjectedBlocks } from "./markdown.js";
 
 const CUSTOM_TYPE = "pi-claudian-auto-save-markdown";
 const ENV_SUBDIR = "PI_SAVE_CONVERSATION_DIR";
@@ -199,7 +216,7 @@ const SAVE_STATE_SCHEMA = "1.2";
  * the frontmatter and the document heading); additive frontmatter fields do
  * NOT bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.3";
+const FORMAT_VERSION = "1.4";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -888,7 +905,12 @@ export default function (pi: ExtensionAPI) {
 
   function firstUserText(messages: SessionMessageEntry[]): string | undefined {
     for (const e of messages) {
-      if (e.message.role === "user") return userText(e.message.content) || undefined;
+      if (e.message.role === "user") {
+        // Title derivation reads the plain typed message — every known
+        // injected block (see markdown.ts) is stripped, mirroring how the
+        // client strips the same blocks for its own session titles.
+        return stripInjectedBlocks(userText(e.message.content)) || undefined;
+      }
     }
     return undefined;
   }
@@ -933,19 +955,6 @@ export default function (pi: ExtensionAPI) {
   // ---------- markdown rendering ----------
 
   /**
-   * Inline code span for arbitrary raw output (tool results, argument JSON):
-   * the delimiter is always one backtick longer than the longest backtick run
-   * inside the text, so content that itself contains backticks cannot break
-   * the span. Tool output renders literally instead of being parsed as
-   * markdown (headings, bold, wiki links …).
-   */
-  function inlineCode(text: string): string {
-    const longest = (text.match(/`+/g) ?? []).reduce((a, r) => Math.max(a, r.length), 0);
-    const fence = "`".repeat(longest + 1);
-    return `${fence}${text}${fence}`;
-  }
-
-  /**
    * Strip leading blank lines and trailing whitespace from a rendered block,
    * so joins and separators always keep exactly one blank line around them
    * no matter what blank lines the content itself starts or ends with.
@@ -985,17 +994,6 @@ export default function (pi: ExtensionAPI) {
     const counts = new Map<string, number>();
     for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
     return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(", ");
-  }
-
-  /**
-   * Collapsed Obsidian callout (`> [!type]- title`) wrapping a markdown body:
-   * every body line is prefixed with `>` (empty lines become bare `>`), so the
-   * body keeps rendering as markdown while folding works in both Obsidian
-   * views. Outside Obsidian the callout degrades to a plain blockquote.
-   */
-  function callout(type: string, title: string, body: string): string {
-    const lines = body.split("\n").map((line) => (line ? `> ${line}` : ">"));
-    return `> [!${type}]- ${title}\n${lines.join("\n")}`;
   }
 
   /**
@@ -1074,7 +1072,7 @@ export default function (pi: ExtensionAPI) {
       const m = e.message;
       const t = dateTime(e.timestamp);
       if (m.role === "user") {
-        blocks.push(`${messageHeader("User", t)}\n\n${userText(m.content)}`);
+        blocks.push(`${messageHeader("User", t)}\n\n${renderUserMessageText(userText(m.content))}`);
       } else if (m.role === "assistant") {
         blocks.push(renderAssistant(m, t, results));
       } else if (m.role === "toolResult") {

@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["index.ts", "debug.ts"]
+  "include": ["index.ts", "debug.ts", "markdown.ts"]
 }
