@@ -1,5 +1,11 @@
 # @pi-claudian/sync-title
 
+## 0.3.0
+
+### Minor Changes
+
+- 5f1ce8d: Establish 0.3.0 as the new supported baseline. All versions below 0.3.0 will be deprecated on the npm registry.
+
 ## 0.2.4
 
 ### Patch Changes
