@@ -1,5 +1,11 @@
 # pi-auto-save-to-markdown
 
+## 0.7.2
+
+### Patch Changes
+
+- bf679a8: Add a rendered-in-Obsidian screenshot to the README (English and Chinese).
+
 ## 0.7.1
 
 ### Patch Changes
