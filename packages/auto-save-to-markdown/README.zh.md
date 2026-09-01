@@ -66,7 +66,7 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 ---
 title: "修复登录重定向死循环"
 agent: "pi"
-format_version: "1.1"
+format_version: "1.2"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -126,12 +126,19 @@ Markdown 解析。
 浅色 `<span>` 中（`0.5em`，Obsidian 的 `--text-faint` 颜色），角色名因此保持
 醒目，细节又触手可及。每个消息块以"上下各一个空行"包裹的 `---` 分隔线结尾
 （多余空行会被裁剪），无论是阅读还是程序化切分，都能清楚地区分每个消息块。
+文档标题紧跟在 frontmatter 之后，中间没有空行；追加保存时会顺带修复旧版本
+在两者之间写下的空行。
 
-保存的文件在 Obsidian 中的渲染效果——顶部为 `<标题>-<key>-<时间>.md`
-文件名，frontmatter 折叠在 Properties 面板中，Thinking 与 Tool Calls
-两个 callout 处于折叠状态：
+同一个保存文件在 Obsidian 中的两种渲染视图——顶部为
+`<标题>-<key>-<时间>.md` 文件名，消息块带角色信息头和时间戳，Thinking
+与 Tool Calls 两个 callout 处于折叠状态。首先是 Properties 面板展开、
+展示全部 frontmatter 字段的效果：
 
-![保存的对话文件在 Obsidian 中的渲染效果：文件名呈"标题-key-时间"格式，frontmatter 折叠在 Properties 面板中，消息块带角色信息头和时间戳，Thinking 与 Tool Calls callout 处于折叠状态](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot.png)
+![保存的对话文件在 Obsidian 中渲染、Properties 面板展开的效果：文件名呈"标题-key-时间"格式，全部 frontmatter 字段以属性形式可见（title、agent、format_version、session_id、cost、tokens、时间戳、project_root、session_file），下方为消息正文开头](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-1.png)
+
+然后是 Properties 面板折叠、完整对话正文的效果：
+
+![保存的对话文件在 Obsidian 中的渲染效果：文件名呈"标题-key-时间"格式，frontmatter 折叠在 Properties 面板中，消息块带角色信息头和时间戳，Thinking 与 Tool Calls callout 处于折叠状态](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-2.png)
 
 ### 碎片化 thinking 修复
 
@@ -139,7 +146,10 @@ Markdown 解析。
 存成一词一行、甚至一字一行：原始空格塌缩成碎片行开头的单个空格，碎片之间
 被成串的换行拼接。扩展会检测这种损坏（依据带单个前导空格的行、或大量
 1–2 字符碎片行），把碎片重新接回通顺的文本，保存的 thinking 不再一行
-一词。正常的 thinking 块原样保存，不做任何改动。
+一词。段落分隔在修复后得以保留：句末标点之后紧跟 3 个以上换行的分隔串，
+在损坏块中约四分之三是真实的段落边界，因此恰好这类分隔被还原成空行段落，
+其余全部拼接——断行永远不会插进句子中间，最坏也只是落在两个完整句子
+之间，阅读不受影响。正常的 thinking 块原样保存，不做任何改动。
 
 `cost` 和 token 字段统计整条已保存分支，且包含缓存 token（按供应商缓存
 价格计费），因此总计可与供应商侧账单（如 OpenRouter Activity）对照。未

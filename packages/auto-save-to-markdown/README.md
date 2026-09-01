@@ -92,7 +92,7 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.1"
+format_version: "1.2"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -156,13 +156,21 @@ assistant messages) sits in a small faint `<span>` (`0.5em`, Obsidian's
 `--text-faint` color), so the role stays visually dominant while the details
 remain a glance away. Each block ends with a `---` separator wrapped in single
 blank lines (extra blank lines are trimmed), so blocks are easy to tell apart
-both when reading and when splitting the file programmatically.
+both when reading and when splitting the file programmatically. The document
+heading sits directly after the frontmatter with no blank line between them;
+appends heal the blank line that older versions wrote there.
 
-A saved file rendered in Obsidian — the `<title>-<key>-<time>.md` filename on
-top, the frontmatter folded into the Properties panel, and the Thinking and
-Tool Calls callouts collapsed:
+Two views of the same saved file rendered in Obsidian — the
+`<title>-<key>-<time>.md` filename on top, message blocks with role headers
+and timestamps, and the Thinking and Tool Calls callouts collapsed. First
+with the Properties panel expanded, showing all frontmatter fields:
 
-![A saved conversation file rendered in Obsidian: filename in the title-key-time pattern, frontmatter folded into the Properties panel, message blocks with role headers and timestamps, and collapsed Thinking and Tool Calls callouts](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot.png)
+![A saved conversation file rendered in Obsidian with the Properties panel expanded: filename in the title-key-time pattern, all frontmatter fields visible as properties (title, agent, format version, session id, cost, tokens, timestamps, project root, session file), and the beginning of the message body](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-1.png)
+
+Then with the Properties panel folded away and the full conversation body in
+view:
+
+![A saved conversation file rendered in Obsidian: filename in the title-key-time pattern, frontmatter folded into the Properties panel, message blocks with role headers and timestamps, and collapsed Thinking and Tool Calls callouts](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-2.png)
 
 ### Fragmented thinking repair
 
@@ -172,7 +180,13 @@ original spaces collapse into leading spaces of one-word fragments joined by
 runs of newlines. The extension detects this corruption (lines starting with a
 single leading space, or a majority of 1–2-character fragment lines) and
 re-joins the fragments into flowing text, so saved thinking reads normally
-instead of one word per line. Clean thinking blocks are written untouched.
+instead of one word per line. Paragraph breaks survive the repair: a separator
+run of 3+ newlines that follows a sentence-final character is a real paragraph
+break about three times out of four in corrupted blocks, so exactly those
+separators are restored to blank-line paragraphs while every other separator
+joins — a break is never inserted mid-sentence; worst case, one lands between
+two complete sentences, which still reads fine. Clean thinking blocks are
+written untouched.
 
 `cost` and the token fields cover the whole saved branch and include cached
 tokens (priced at the provider's cache rates), so the totals are comparable

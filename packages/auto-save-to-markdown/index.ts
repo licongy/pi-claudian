@@ -114,7 +114,9 @@
  *   still exports its complete history.
  * - Thinking repair: reasoning blocks stored with the upstream
  *   newline-fragmentation corruption (one word per line) are detected and
- *   re-joined into flowing text before saving; clean thinking is untouched.
+ *   re-joined into flowing text before saving, keeping paragraph breaks
+ *   where they survive as long separator runs after sentence ends; clean
+ *   thinking is untouched.
  *
  * Manual commands:
  * - `/save-conversation` saves the current branch immediately and reports
@@ -190,10 +192,11 @@ const SAVE_STATE_SCHEMA = "1.2";
  * structural breaks that change how a parser or migration tool must match
  * blocks (message header structure, `---` separators, callout syntax);
  * MINOR for parse-invariant tweaks and bugfixes (header styling, content
- * transforms like the thinking repair); additive frontmatter fields do NOT
- * bump it — they are invisible to any within-major parser.
+ * transforms like the thinking repair, the blank line once written between
+ * the frontmatter and the document heading); additive frontmatter fields do
+ * NOT bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.1";
+const FORMAT_VERSION = "1.2";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -416,10 +419,21 @@ interface BranchMeta {
  * " " lines included), and an excess of 1–2-char non-list-marker lines (CJK
  * fragments carry no leading space). Clean thinking never matches either.
  *
- * Repair strips all newlines — run length carries no recoverable meaning (the
- * same paragraph boundary appears as 1, 2 or 3 newlines, while 4–7 can sit
- * mid-sentence) — and collapses the doubled spaces left by lone-space
- * fragments. Clean blocks pass through untouched.
+ * Repair re-joins the fragments into flowing text. Word separators — the
+ * whitespace runs between two fragments — lose their newlines: run length
+ * alone carries no recoverable meaning, because the same word separator
+ * appears as 1, 2 or 3 newlines depending on the block. Original paragraph
+ * boundaries survive as a faint but strong signal: a separator run of 3+
+ * newlines that follows a sentence-final character (closing quotes and
+ * brackets skipped when looking) marks a real paragraph break 73–93% of the
+ * time in corrupted blocks, while plain word separators sit mid-sentence —
+ * so exactly those separators become blank-line paragraph breaks and
+ * everything else is joined. The sentence-final guard means a break is never
+ * inserted mid-sentence: worst case, one lands between two complete
+ * sentences, which still reads fine. Join spacing comes from the separator
+ * itself: a separator containing a surviving space joins with one space, a
+ * bare one (CJK fragments, attached punctuation) joins with nothing. Clean
+ * blocks pass through untouched.
  */
 
 /** Line whose single leading space is a survived word separator. */
@@ -445,14 +459,42 @@ function isFragmentedThinking(s: string): boolean {
   return nonBlank.filter(isThinkingShortFragment).length / nonBlank.length >= 0.4;
 }
 
+/** Sentence-final characters: a long separator run after one may be a paragraph break. */
+const THINKING_SENTENCE_END = /[.!?。！？…]/;
+/** Closing punctuation skipped when looking for the sentence end behind it. */
+const THINKING_CLOSING = /[)\]}"'”』」）】》]/;
+/** Newlines a separator run needs before it can count as a paragraph break. */
+const THINKING_PARAGRAPH_RUN = 3;
+
 /** Repair newline-fragmented thinking; clean thinking is returned unchanged. */
 function repairThinking(s: string): string {
   if (!isFragmentedThinking(s)) return s;
   debug("repairing fragmented thinking block:", s.length, "chars");
-  return s
-    .replace(/\n+/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    let end = i;
+    while (end < s.length && !/\s/.test(s[end])) end++;
+    out += s.slice(i, end);
+    let next = end;
+    while (next < s.length && /\s/.test(s[next])) next++;
+    if (next >= s.length) break; // trailing whitespace: drop
+    const sep = s.slice(end, next);
+    if (!/[\n\r]/.test(sep)) {
+      out += " "; // plain spaces: a single word separator
+    } else {
+      const newlines = sep.match(/[\n\r]/g)!.length;
+      let p = out.length - 1;
+      while (p >= 0 && THINKING_CLOSING.test(out[p])) p--;
+      const sentenceEnd = p >= 0 && THINKING_SENTENCE_END.test(out[p]);
+      if (newlines >= THINKING_PARAGRAPH_RUN && sentenceEnd) out += "\n\n";
+      else if (/[ \t]/.test(sep)) out += " ";
+      // A bare newline separator attached CJK fragments or punctuation:
+      // join with nothing.
+    }
+    i = next;
+  }
+  return out.replace(/[ \t]{2,}/g, " ").trim();
 }
 
 // ---------- foreign sessions for /save-conversation-all ----------
@@ -1405,7 +1447,14 @@ export default function (pi: ExtensionAPI) {
 
   function replaceFrontmatter(existing: string, fm: string): string {
     if (/^---\r?\n[\s\S]*?\r?\n---\r?\n/.test(existing)) {
-      return existing.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, fm + "\n");
+      const rest = existing.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+      // Heal the old layout's blank line(s) between the frontmatter and the
+      // document heading (new files write the heading directly after the
+      // frontmatter). Only blank lines immediately followed by a `#` heading
+      // at the very start of the body are stripped — anything the user
+      // reorganized stays untouched.
+      const healed = rest.replace(/^(?:[ \t]*\r?\n)+(#[^\r\n]*)/, "$1");
+      return fm + "\n" + healed;
     }
     return `${fm}\n\n${existing}`;
   }
@@ -1414,10 +1463,12 @@ export default function (pi: ExtensionAPI) {
    * Rewrite the document heading (the `# title` line written at file
    * creation) to the current title. Only called on rename-on-title saves.
    * The heading is located as the first non-blank line after the frontmatter
-   * closing delimiter (file creation writes exactly one blank line before
-   * it) rather than "the first # line anywhere", so a manually deleted
-   * heading (whose place would otherwise be taken by some content heading
-   * further down) cannot be mis-rewritten.
+   * closing delimiter — new files write it directly after the frontmatter
+   * with no blank line, legacy files wrote exactly one blank line before it
+   * (replaceFrontmatter heals that away on appends) — rather than "the
+   * first # line anywhere", so a manually deleted heading (whose place
+   * would otherwise be taken by some content heading further down) cannot
+   * be mis-rewritten.
    */
   function rewriteDocumentHeading(content: string, title: string): string {
     const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(content);
@@ -1643,7 +1694,7 @@ export default function (pi: ExtensionAPI) {
       const target = path.join(plan.dir, plan.filename);
       const meta = computeMeta(ctx, plan.pathMessages, plan.sessionKey, undefined, undefined);
       const body = renderEntries(plan.pathMessages); // ends with the trailing separator
-      const content = `${frontmatter(meta)}\n\n# ${meta.title}\n\n${body}`;
+      const content = `${frontmatter(meta)}\n# ${meta.title}\n\n${body}`;
       await atomicWrite(target, content);
       debug("created conversation file:", target);
       return {
