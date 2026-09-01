@@ -92,10 +92,10 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.2"
+format_version: "1.3"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
-last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
+branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
 model: "z-ai/glm-5.3"
 provider: "openrouter"
 cost: 0.023401
@@ -105,8 +105,8 @@ tokens_output: 3515
 tokens_cache_read: 0
 tokens_cache_write: 0
 messages: 8
-created: "2026-08-29T05:05:12.000Z"
-updated: "2026-08-29T05:42:10.000Z"
+created: "2026-08-29T13:05:12+08:00"
+updated: "2026-08-29T13:42:10+08:00"
 project_root: "/Users/me/project"
 session_file: "~/.pi/agent/sessions/--Users-me-project-20260829-050500_ab12.jsonl"
 ---

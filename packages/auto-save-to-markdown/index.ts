@@ -25,11 +25,14 @@
  *   plugins for other runtimes would write their own value), format_version
  *   (the document format of the last write — additive frontmatter fields
  *   never bump it; see FORMAT_VERSION), session id, session key (the
- *   filename key), last entry id (the id of the deepest message entry on the
- *   saved branch — the file's position in the session jsonl tree at the last
- *   write), model, provider, cumulative cost and tokens (input, output,
- *   cache read/write), message count, created/updated timestamps, project
- *   root and session file.
+ *   filename key), branch last entry id (field `branch_last_entry_id` — the
+ *   id of the deepest message entry on the saved branch: the file's position
+ *   in the session jsonl tree at the last write, scoped to this file's
+ *   branch, not the session-wide last entry), model, provider, cumulative
+ *   cost and tokens (input, output,
+ *   cache read/write), message count, created/updated timestamps (tz-aware
+ *   ISO 8601 in the local timezone with its numeric UTC offset, e.g.
+ *   "2026-08-29T13:05:12+08:00"), project root and session file.
  * - Body format: every message block opens with a setext-H1 info header
  *   (`User <span …>YYYY-MM-DD HH:MM:SS</span>` /
  *   `Assistant <span …>YYYY-MM-DD HH:MM:SS · model</span>`, where the span
@@ -196,7 +199,7 @@ const SAVE_STATE_SCHEMA = "1.2";
  * the frontmatter and the document heading); additive frontmatter fields do
  * NOT bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.2";
+const FORMAT_VERSION = "1.3";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -248,8 +251,8 @@ interface SaveState {
   /**
    * Id of the session tree leaf at save time (getLeafId()) — may be a custom
    * state entry rather than a message; used to rank continuation candidates
-   * on the current path. Distinct from frontmatter `last_entry_id`, which is
-   * the deepest message entry (an id actually present in the file).
+   * on the current path. Distinct from frontmatter `branch_last_entry_id`,
+   * which is the deepest message entry (an id actually present in the file).
    */
   lastSavedEntryId: string | null;
   file: string;
@@ -388,10 +391,11 @@ interface BranchMeta {
   sessionKey: string;
   /**
    * Id of the deepest message entry on the saved branch at the last write
-   * (field name `last_entry_id`) — the file's exact position in the
-   * session jsonl tree. Updated on every append, like `updated`.
+   * (field name `branch_last_entry_id`) — the file's exact position in the
+   * session jsonl tree, scoped to this file's branch rather than the
+   * session-wide last entry. Updated on every append, like `updated`.
    */
-  lastEntryId: string;
+  branchLastEntryId: string;
   model: string | null;
   provider: string | null;
   cost: number;
@@ -1097,6 +1101,24 @@ export default function (pi: ExtensionAPI) {
     return `"${safe.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   }
 
+  /**
+   * ISO 8601 timestamp in the machine's local timezone, with the numeric
+   * UTC offset appended (e.g. "2026-08-29T13:05:12+08:00"): tz-aware, so the
+   * value reads as local wall-clock time without assuming the reader's
+   * timezone. Legacy files written with UTC "Z" values parse identically.
+   */
+  function localIsoTimestamp(date: Date): string {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const offsetMin = -date.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const abs = Math.abs(offsetMin);
+    return (
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+      `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+    );
+  }
+
   function frontmatter(meta: BranchMeta): string {
     const lines: string[] = ["---"];
     lines.push(`title: ${yamlQuote(meta.title)}`);
@@ -1104,7 +1126,7 @@ export default function (pi: ExtensionAPI) {
     lines.push(`format_version: ${yamlQuote(FORMAT_VERSION)}`);
     if (meta.sessionId) lines.push(`session_id: ${yamlQuote(meta.sessionId)}`);
     lines.push(`session_key: ${yamlQuote(meta.sessionKey)}`);
-    lines.push(`last_entry_id: ${yamlQuote(meta.lastEntryId)}`);
+    lines.push(`branch_last_entry_id: ${yamlQuote(meta.branchLastEntryId)}`);
     if (meta.model) lines.push(`model: ${yamlQuote(meta.model)}`);
     if (meta.provider) lines.push(`provider: ${yamlQuote(meta.provider)}`);
     lines.push(`cost: ${meta.cost.toFixed(6)}`);
@@ -1177,14 +1199,14 @@ export default function (pi: ExtensionAPI) {
         tokensCacheWrite += usage.cacheWrite ?? 0;
       }
     }
-    const now = new Date().toISOString();
+    const now = localIsoTimestamp(new Date());
     return {
       title: displayTitle(ctx, firstUserText(pathMessages)),
       agent: agent ?? AGENT,
       sessionId: ctx.session.getSessionId(),
       sessionFile: ctx.session.getSessionFile() ?? null,
       sessionKey,
-      lastEntryId: pathMessages[pathMessages.length - 1].id,
+      branchLastEntryId: pathMessages[pathMessages.length - 1].id,
       model,
       provider,
       cost,
