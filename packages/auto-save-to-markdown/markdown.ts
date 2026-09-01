@@ -54,8 +54,11 @@ export function callout(type: string, title: string, body: string, fold = true):
  *   references (linked_note / linked_content — the client's attachment
  *   mechanism; a typed @-mention stays as plain text in the message, these
  *   are the machine copy).
- * - Hidden: agent-side traces (loaded skills) — rendered as a one-line
- *   marker, content dropped (a skill is re-loadable from its location).
+ * - Hidden: agent-side traces (loaded skills) — rendered as a folded
+ *   `> [!note]- Skill · <name>` marker with the name riding the title
+ *   (which skill was loaded is the marker's whole meaning and must survive
+ *   the collapsed view), the content dropped (a skill is re-loadable from
+ *   its location).
  *
  * Unknown tags are left verbatim: this is both the safety boundary against
  * mangling pasted XML and a soft failure mode for future client tags (they
@@ -151,60 +154,105 @@ function wikilinkOf(path: string): string {
   return base && base !== path ? `[[${path}|${base}]]` : `[[${path}]]`;
 }
 
-/**
- * One attribute value for the callout body: path/location values that look
- * like vault-relative note paths become clickable wikilinks (the archives
- * live in the same vault; outside Obsidian they degrade to readable bracket
- * text, the same degradation callouts already accept); everything else is
- * an inline code span.
- */
-function formatAttrValue(name: string, value: string): string {
-  return (name === "path" || name === "location") && isVaultNotePath(value)
-    ? wikilinkOf(value)
-    : inlineCode(value);
+/** Whether an attribute renders as a bare wikilink (a vault-shaped path/location). */
+function isWikilinkAttr(p: { name: string; value: string }): boolean {
+  return (p.name === "path" || p.name === "location") && isVaultNotePath(p.value);
 }
 
 /**
- * One injected block as a callout, fully generic:
- *
- * - title — the tag name in words;
- * - body — attribute pairs as `**name**: value` lines joined by ` · `, then
- *   (after a blank line) the content;
- * - visible blocks quote their content in a folded `> [!quote]-` callout;
- *   blocks without content stay unfolded (nothing to hide behind the fold);
- * - hidden (agent-side) blocks render as an unfolded `> [!note]` marker
- *   line with the content dropped.
+ * Attribute pairs of one injected block as body items: a `path`/`location`
+ * value shaped like a vault-relative note path becomes a BARE wikilink —
+ * no `**name**:` prefix, because the aliased filename is self-explanatory
+ * (the file is user-provided material) and the label only adds noise — and
+ * sorts first, so the reference leads the line; every other attribute stays
+ * a labeled `**name**: value` item in source order.
+ */
+function attrItems(attrs: string): string[] {
+  const pairs = parseAttrs(attrs);
+  return [
+    ...pairs.filter(isWikilinkAttr).map((p) => wikilinkOf(p.value)),
+    ...pairs.filter((p) => !isWikilinkAttr(p)).map((p) => `**${p.name}**: ${inlineCode(p.value)}`),
+  ];
+}
+
+/**
+ * Hidden block as its own self-contained marker callout: the `name`
+ * attribute joins the title — WHICH skill was loaded is the marker's whole
+ * meaning, and a collapsed `Skill` alone would say nothing — while the
+ * remaining attributes (the location) form the body and the content is
+ * dropped (a skill is re-loadable from its location). A hidden block with
+ * no attributes at all carries no information and is removed.
+ */
+function hiddenCallout(tag: string, attrs: string): string {
+  const pairs = parseAttrs(attrs);
+  if (pairs.length === 0) return "";
+  const name = pairs.find((p) => p.name === "name")?.value;
+  const body = pairs
+    .filter((p) => p.name !== "name")
+    .map((p) => (isWikilinkAttr(p) ? wikilinkOf(p.value) : `**${p.name}**: ${inlineCode(p.value)}`))
+    .join(" · ");
+  return callout("note", name ? `${tagTitle(tag)} · ${name}` : tagTitle(tag), body);
+}
+
+/**
+ * One VISIBLE injected block's rendered body (no callout wrapper; hidden
+ * blocks render through hiddenCallout): the attribute items, then (after a
+ * blank line) the content.
  *
  * linked_note is the one content concession: its whole payload IS a note
  * reference, so content shaped like a vault note path renders as a wikilink
  * too — the same mechanical shape test, no semantics.
  */
-function renderInjectedBlock(tag: string, attrs: string, content: string): string {
-  const attrLine = parseAttrs(attrs)
-    .map((p) => `**${p.name}**: ${formatAttrValue(p.name, p.value)}`)
-    .join(" · ");
-  const title = tagTitle(tag);
-  if (HIDDEN_TAGS.has(tag)) return callout("note", title, attrLine, false);
+function injectedBlockBody(tag: string, attrs: string, content: string): string {
+  const attrLine = attrItems(attrs).join(" · ");
   const text = content ? unwrapCDATA(content).trim() : "";
   const body = tag === "linked_note" && isVaultNotePath(text) ? wikilinkOf(text) : text;
-  return callout(
-    "quote",
-    title,
-    attrLine ? (body ? `${attrLine}\n\n${body}` : attrLine) : body,
-    Boolean(body),
-  );
+  return attrLine ? (body ? `${attrLine}\n\n${body}` : attrLine) : body;
 }
 
 /**
  * User message text for the saved body: every known injected block renders
- * as a callout; anything else stays verbatim.
+ * as a preset-collapsed callout — visible blocks as `> [!quote]-`, hidden
+ * blocks as a `> [!note]-` marker — and a RUN of visible same-tag blocks
+ * with nothing but whitespace between them merges into ONE callout (a user
+ * attaching five notes saves one Linked Content callout listing five
+ * wikilinks, not five callouts; hidden markers never merge — each names its
+ * own skill). Anything else stays verbatim.
  */
 export function renderUserMessageText(text: string): string {
-  return text.replace(
-    INJECTED_BLOCK_RE,
-    (_s: string, tag: string, attrs: string, content?: string) =>
-      renderInjectedBlock(tag, attrs, content ?? ""),
-  );
+  const re = new RegExp(INJECTED_BLOCK_RE, "g");
+  let out = "";
+  let pos = 0;
+  let runTag: string | null = null;
+  const runBodies: string[] = [];
+  const flushRun = () => {
+    if (runTag === null) return;
+    out += callout("quote", tagTitle(runTag), runBodies.join("\n\n"));
+    runTag = null;
+    runBodies.length = 0;
+  };
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const tag = m[1];
+    const gap = text.slice(pos, m.index);
+    const mergeable = runTag !== null && tag === runTag && gap.trim() === "";
+    if (!mergeable) {
+      // A different tag, real text between the blocks, or a hidden block
+      // (self-contained markers never merge) ends the run; the gap is
+      // emitted only then — inside a run it is whitespace.
+      flushRun();
+      out += gap;
+    }
+    if (HIDDEN_TAGS.has(tag)) {
+      out += hiddenCallout(tag, m[2]);
+    } else {
+      if (runTag === null) runTag = tag;
+      runBodies.push(injectedBlockBody(tag, m[2], m[3] ?? ""));
+    }
+    pos = re.lastIndex;
+  }
+  flushRun();
+  return out + text.slice(pos);
 }
 
 /**

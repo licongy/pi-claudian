@@ -92,7 +92,7 @@ changes never touch the filename, and manually renamed files are left alone.
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.4"
+format_version: "1.5"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -119,7 +119,7 @@ User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:
 The login page redirects in a loop after the auth refactor...
 
 > [!quote]- Editor Selection
-> **path**: [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
+> [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
 >
 > export function middleware(request) { … }
 
@@ -158,14 +158,21 @@ editor's active selection, attached or referenced notes, loaded skills — are
 re-rendered from their raw XML (which Obsidian cannot render and would show
 as literal angle-bracket text) into generic callouts. No block is parsed
 individually: the title is the tag name in words (`editor_selection` →
-Editor Selection), attribute pairs open the body as `**name**: value` lines
-(`path`/`location` values shaped like vault-relative note paths become
-Obsidian wikilinks), and the content follows, quoted in a collapsed callout.
-User-provided blocks (selections, note attachments) stay visible;
-agent-side traces (skills) render as a one-line marker with the content
-dropped. Unknown markup is left verbatim, so XML pasted as content is never
-mangled — and the fallback filename slug derives from the typed message
-with every known block stripped.
+Editor Selection), and the body opens with vault-shaped `path`/`location`
+values as bare Obsidian wikilinks (the aliased filename speaks for itself —
+no `path:` label), followed by the remaining attributes as
+`**name**: value` items, then the content. Every callout is preset-collapsed
+— user-provided blocks (selections, note attachments) as `> [!quote]-`, even
+when they carry only attributes (the client emits note references as
+self-closing tags carrying just a path), agent-side skill traces as a
+`> [!note]- Skill · <name>` marker (the loaded skill's name rides the title,
+so the collapsed marker still says which skill; the location follows in the
+body, the content is dropped) — and consecutive blocks of
+the same tag (nothing but whitespace between them) merge into one callout,
+so a run of note references collapses into a single list. Unknown markup is
+left verbatim, so XML pasted as content is never mangled — and the fallback
+filename slug derives from the typed message with every known block
+stripped.
 
 Each message block opens with a setext level-1 info header (`User`,
 `Assistant`) underlined with `===` — one level above the `##` headings AI

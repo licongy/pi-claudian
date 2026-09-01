@@ -61,12 +61,21 @@
  *   Obsidian cannot render (unknown tags are not HTML; CDATA is XML), so
  *   every block in a known vocabulary is re-rendered generically (see
  *   markdown.ts) — no per-tag formatting: the callout title is the tag name
- *   in words, attribute pairs open the body as "**name**: value" lines
- *   (path/location values shaped like vault-relative note paths become
- *   wikilinks), and the content follows (the client's `]]>` split-escaping
- *   reversed). User-provided blocks (selections, attachments) quote their
- *   content in a collapsed `> [!quote]`; agent-side traces (skills) render
- *   as a one-line `> [!note]` marker with the content dropped. Title
+ *   in words, the body opens with vault-shaped path/location values as
+ *   bare wikilinks (the aliased filename is self-explanatory — a `path:`
+ *   label is noise) followed by the remaining attributes as
+ *   "**name**: value" lines, then the content (the client's `]]>`
+ *   split-escaping reversed). Every callout is preset-collapsed: visible
+ *   blocks (selections, note references, attachments) as `> [!quote]-`,
+ *   whether they carry content or only attributes (the client emits note
+ *   references as self-closing tags whose whole payload is a path
+ *   attribute), agent-side traces (skills) as a `> [!note]- Skill · <name>`
+ *   marker — the loaded skill's name rides the title so the collapsed
+ *   marker still says which skill, the location follows in the body, the
+ *   content is dropped — and consecutive visible same-tag blocks (nothing
+ *   but whitespace between them) merge into one callout, so a run of note
+ *   references collapses into a single list (skill markers never merge:
+ *   each names its own skill). Title
  *   derivation strips every known block — the typed message is the title.
  *   Unknown markup is left verbatim so XML pasted as content is never
  *   mangled.
@@ -216,7 +225,7 @@ const SAVE_STATE_SCHEMA = "1.2";
  * the frontmatter and the document heading); additive frontmatter fields do
  * NOT bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.4";
+const FORMAT_VERSION = "1.5";
 
 /**
  * Package version of this extension, read best-effort from the adjacent

@@ -66,7 +66,7 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 ---
 title: "修复登录重定向死循环"
 agent: "pi"
-format_version: "1.4"
+format_version: "1.5"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -93,7 +93,7 @@ User <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 13:05:
 auth 重构之后登录页一直重定向死循环……
 
 > [!quote]- Editor Selection
-> **path**: [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
+> [[src/auth/middleware.ts|middleware.ts]] · **lines**: `14-22`
 >
 > export function middleware(request) { … }
 
@@ -128,12 +128,17 @@ Markdown 解析。
 客户端或 agent 注入到用户消息中的提示块——编辑器当前选区、附加或引用的
 笔记、加载的 skill——会从原始 XML（Obsidian 无法渲染，只会显示成裸露的
 尖括号文本）重新渲染为通用 callout。不做任何逐块解析：标题取标记名的分词
-（`editor_selection` → Editor Selection），属性对以 `**属性**: 值` 行开头
-（形似 vault 相对笔记路径的 `path`/`location` 值会转为 Obsidian wikilink），
-随后是引用内容，折叠在 callout 中。用户提供的块（选区、笔记附件）保持
-可见；agent 侧痕迹（skill）渲染为单行标记，内容不再展示。未知标记原样
-保留，用户粘贴的 XML 内容绝不会被误改；回退文件名 slug 也从剥离全部
-已知块后的纯键入文本推导。
+（`editor_selection` → Editor Selection），正文以形似 vault 相对笔记路径的
+`path`/`location` 值开头——直接渲染为不带标签的 Obsidian wikilink（别名
+文件名自解释，`path:` 标签反而冗余），其余属性以 `**属性**: 值` 跟随，
+最后是引用内容。所有 callout 一律预设折叠——用户提供的块（选区、笔记附件）
+为 `> [!quote]-`（仅有属性的自闭合笔记引用同样折叠），agent 侧痕迹（skill）
+为 `> [!note]- Skill · <名称>` 标记（加载的 skill 名称直接进标题，折叠状态
+也能看到是哪个 skill；location 跟在正文，内容丢弃）；连续的同标签块（中间
+只有空白）合并进同一个 callout，一串笔记引用因此收拢为一份列表（skill 标记
+不合并：各自标注各自的 skill）。未知标记原样保留，用户粘贴的
+XML 内容绝不会被误改；回退文件名 slug 也从剥离全部已知块后的纯键入文本
+推导。
 
 每个消息块以 setext 一级信息头（`User`、`Assistant`，下一行以 `===` 下划）
 开头——高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题
