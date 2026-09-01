@@ -1,5 +1,12 @@
 # pi-auto-save-to-markdown
 
+## 0.7.4
+
+### Patch Changes
+
+- ef3e254: Rename the frontmatter `last_entry_id` field to `branch_last_entry_id` to state its actual scope: the id of the deepest message entry on the saved branch — the last entry of THIS file's branch, not of the whole session tree (a `/tree` switch can leave a newer entry elsewhere in the tree). The value and its update-on-every-append semantics are unchanged; the new name keeps the `_id` suffix convention of `session_id`/`session_key`. Document format bumped to 1.3 (a field rename is a parse-invariant change, not an additive field).
+- ef3e254: Write the frontmatter `created` and `updated` timestamps as tz-aware local time: ISO 8601 with the machine's numeric UTC offset (e.g. `2026-08-29T13:05:12+08:00`) instead of UTC `…Z`. The value reads as local wall-clock time without assuming the reader's timezone, matching the local times already shown in the message headers and the filename timestamp. Appends preserve an existing file's original `created` verbatim, so legacy UTC values stay as they are — both spellings are ISO 8601 and parse identically. Document format 1.3 covers this and the `branch_last_entry_id` rename (both ship together, parse-invariant tweaks).
+
 ## 0.7.3
 
 ### Patch Changes
