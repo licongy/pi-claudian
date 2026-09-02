@@ -22,6 +22,10 @@ Run from the repo root:
   (always with `run`: bare `pnpm version` is pnpm's built-in version command,
   which shadows this script and never consumes changesets)
 - `pnpm run release` — publish all changed packages to npm
+- `pnpm run release:one <package-name|package-dir>` — publish a single package and
+  create its git tag (use when publishing everything at once fails, e.g. npm
+  login issues; `--tag-only` tags without publishing, for when npm already has
+  the version)
 
 Per-package equivalents exist (e.g. `pnpm --filter @pi-claudian/sync-title typecheck`).
 

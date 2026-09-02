@@ -34,7 +34,8 @@
     "format": "prettier --write .",
     "changeset": "changeset",
     "version": "node scripts/check-clean.mjs && changeset version",
-    "release": "node scripts/check-clean.mjs && changeset publish"
+    "release": "node scripts/check-clean.mjs && changeset publish",
+    "release:one": "node scripts/release-one.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.12",
