@@ -13,7 +13,10 @@ fork from inside Pi.
 
 ## Why
 
-Claudian stores per-conversation metadata under `.claudian/sessions/conv-*.meta.json`.
+Claudian stores per-conversation metadata under `.claudian/sessions/` — at the
+top level (`conv-*.meta.json`) for conversations created before Claudian 2.2.5,
+and in per-device subdirectories (`devices/<deviceId>/conv-*.meta.json`) for
+newer ones; both layouts are always scanned.
 For Pi-provider conversations it tracks the active position in Pi's session tree
 as `providerState.leafEntryId`, plus the `sessionFile` and `sessionId`. Claudian
 never watches Pi for changes, so two Pi operations leave that metadata stale:

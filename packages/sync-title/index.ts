@@ -9,8 +9,12 @@
  * overwrites a name you set yourself.
  *
  * How it works:
- * - Claudian stores conversation metadata in `.claudian/sessions/conv-*.meta.json`.
- *   The filename is Claudian's conversationId (conv-xxx), not Pi's session UUID.
+ * - Claudian stores conversation metadata in `.claudian/sessions/`, in two
+ *   layouts: metas created by Claudian 2.2.5+ live in per-device
+ *   subdirectories (`sessions/devices/<deviceId>/conv-*.meta.json`), older
+ *   ones — and conversations created before that switch — at the top level
+ *   (`sessions/conv-*.meta.json`). Both are always scanned. The filename is
+ *   Claudian's conversationId (conv-xxx), not Pi's session UUID.
  * - Meta fields:
  *     meta.id                        = Claudian conversationId
  *     meta.title                     = Claudian auto-generated title
@@ -90,7 +94,7 @@ import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
-import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
+import { listClaudianMetaFiles, resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 
 /**
  * Backoff schedule for retries while Claudian's title is still being generated.
@@ -269,6 +273,10 @@ export default function (pi: ExtensionAPI) {
   // on settle, stale ctx, watcher error, or session_shutdown. The backoff
   // retries keep running as a backstop (fs.watch is unreliable on some
   // network/synced filesystems); whichever settles first disarms the watcher.
+  // The watched directory is the matched meta's own parent: top-level metas
+  // watch the sessions dir, device-layout metas watch their
+  // devices/<deviceId>/ subdirectory — watching the sessions root would miss
+  // writes inside the subdirectory.
   let metaWatcher: fsSync.FSWatcher | null = null;
   let watchedCtx: ExtensionContext | null = null;
   let watchedMetaFile: string | null = null;
@@ -281,12 +289,13 @@ export default function (pi: ExtensionAPI) {
   // consults it; other sessions' meta writes are filtered by filename anyway.
   let selfWriteSuppress: { file: string; until: number } | null = null;
 
-  function armMetaWatcher(ctx: ExtensionContext, metaFile: string, sessionsDir: string): void {
+  function armMetaWatcher(ctx: ExtensionContext, metaFile: string): void {
     if (metaWatcher) return;
     watchedCtx = ctx;
     watchedMetaFile = metaFile;
+    const watchDir = path.dirname(metaFile);
     try {
-      metaWatcher = fsSync.watch(sessionsDir, (_event, filename) => {
+      metaWatcher = fsSync.watch(watchDir, (_event, filename) => {
         // Post-match filter: only this session's meta file matters. A null
         // filename (possible on some platforms) cannot be filtered, so it
         // falls through to a debounced reconcile rather than being dropped.
@@ -318,7 +327,7 @@ export default function (pi: ExtensionAPI) {
       debug("meta watcher error:", String(e));
       disarmMetaWatcher("watcher error — backoff retries continue as backstop");
     });
-    debug("meta watcher armed on:", sessionsDir, "for:", metaFile);
+    debug("meta watcher armed on:", watchDir, "for:", metaFile);
   }
 
   function disarmMetaWatcher(reason: string): void {
@@ -359,6 +368,12 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * Find the Claudian conversation meta referencing this Pi session. Scans
+   * every conv-*.meta.json across both Claudian storage layouts (top level
+   * and the per-device `devices/<deviceId>/` subdirectories) — see
+   * listClaudianMetaFiles in claudian-vault.ts.
+   */
   async function findMetaForSession(
     sessionsDir: string,
     sessionId: string,
@@ -367,7 +382,7 @@ export default function (pi: ExtensionAPI) {
     debug("scanning", sessionsDir, "for session", sessionId);
     let files: string[] = [];
     try {
-      files = await fs.readdir(sessionsDir);
+      files = await listClaudianMetaFiles(sessionsDir);
     } catch {
       debug("sessions dir unreadable:", sessionsDir);
       return null;
@@ -375,9 +390,7 @@ export default function (pi: ExtensionAPI) {
 
     let fileFallback: { meta: ClaudianMeta; file: string } | null = null;
 
-    for (const f of files) {
-      if (!f.endsWith(".meta.json")) continue;
-      const fullPath = path.join(sessionsDir, f);
+    for (const fullPath of files) {
       let meta: ClaudianMeta;
       try {
         meta = JSON.parse(await fs.readFile(fullPath, "utf-8"));
@@ -548,7 +561,7 @@ export default function (pi: ExtensionAPI) {
           canScheduleRetry ? "scheduling retry #" + (attempt + 1) : "giving up",
         );
         if (canScheduleRetry) scheduleRetry(ctx, sessionId, attempt + 1, false);
-        if (pending) armMetaWatcher(ctx, file, sessionsDir);
+        if (pending) armMetaWatcher(ctx, file);
         return false;
       }
       // Claudian has a title, Pi does not -> write it through
@@ -682,10 +695,12 @@ export default function (pi: ExtensionAPI) {
   /**
    * Batch two-way sync across every Claudian conversation in the current vault.
    * Driven by the `/sync-title-all` command. Unlike the per-session
-   * `reconcile()`, this scans all `conv-*.meta.json` files and applies the same
-   * decision table to each — but non-interactively: it only fills empty names
-   * (Claudian → Pi, Pi → Claudian) and **skips conflicts without overwriting**,
-   * reporting them so the user can resolve each with `/sync-title`.
+   * `reconcile()`, this scans all `conv-*.meta.json` files — across both
+   * storage layouts, top level and `devices/<deviceId>/` — and applies the
+   * same decision table to each — but non-interactively: it only fills empty
+   * names (Claudian → Pi, Pi → Claudian) and **skips conflicts without
+   * overwriting**, reporting them so the user can resolve each with
+   * `/sync-title`.
    *
    * The current session is synced through the live `pi.setSessionName()` API
    * (so Pi's in-memory state stays consistent); every other session is synced
@@ -704,7 +719,7 @@ export default function (pi: ExtensionAPI) {
 
     let files: string[] = [];
     try {
-      files = await fs.readdir(sessionsDir);
+      files = await listClaudianMetaFiles(sessionsDir);
     } catch (e) {
       ctx.ui.notify(`[Title Sync] Cannot read sessions dir: ${String(e)}`, "error");
       return;
@@ -727,9 +742,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     const items: BatchItem[] = [];
-    for (const f of files) {
-      if (!f.endsWith(".meta.json")) continue; // skip .deleted.json / .inputs.json
-      const file = path.join(sessionsDir, f);
+    for (const file of files) {
       let meta: ClaudianMeta;
       try {
         meta = JSON.parse(await fs.readFile(file, "utf-8"));

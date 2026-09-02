@@ -12,10 +12,12 @@ fork 之后，Claudian 对该会话的视图保持正确。
 
 ## 为什么需要
 
-Claudian 将每个会话的元数据存放在 `.claudian/sessions/conv-*.meta.json` 中。对于
-Pi 提供方的会话，它会在 `providerState.leafEntryId` 中记录 Pi 会话树中的活跃位置，
-同时保存 `sessionFile` 和 `sessionId`。Claudian 从不监听 Pi 的变更，因此两项 Pi 操作
-会让这些元数据过期：
+Claudian 将每个会话的元数据存放在 `.claudian/sessions/` 下——Claudian 2.2.5 之前创建的
+对话在顶层（`conv-*.meta.json`），之后的则位于按设备划分的子目录
+（`devices/<deviceId>/conv-*.meta.json`）；两种布局始终都会被扫描。对于 Pi 提供方的
+会话，它会在 `providerState.leafEntryId` 中记录 Pi 会话树中的活跃位置，同时保存
+`sessionFile` 和 `sessionId`。Claudian 从不监听 Pi 的变更，因此两项 Pi 操作会让这些
+元数据过期：
 
 - **`/tree`** 在**同一个会话文件**内将活跃叶子移动到更早的条目（可选地追加一段分支
   摘要）。Claudian 仍指向旧的叶子，因此在 Claudian 中恢复该会话时会打开错误的分支。

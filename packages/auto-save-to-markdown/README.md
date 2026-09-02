@@ -28,6 +28,10 @@ pi install npm:pi-auto-save-to-markdown
 Automatic: after every settled agent turn (`agent_settled`), the current
 conversation branch is written to `<cwd>/<folder>/<title>-<key>-<time>.md`.
 
+Sessions Pi does not persist (in-memory, `--no-session` — including the
+ephemeral auxiliary agents host clients spawn next to the real conversation,
+such as Claudian's title generation) are skipped by every automatic save; only
+the explicit `/save-conversation` command archives such a session on demand.
 Manual: run `/save-conversation` to save the current branch immediately and
 report the file path.
 

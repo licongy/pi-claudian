@@ -9,6 +9,15 @@
  * - Trigger: `agent_settled` — fires once per user prompt, after the turn is
  *   fully done (including automatic retries and compaction), so each save
  *   captures a settled state of the conversation.
+ * - Skip rule: every automatic path (the `agent_settled` save and the batch
+ *   command's live save) skips sessions Pi does not persist — no session
+ *   file, i.e. an in-memory SessionManager (`--no-session`): those are
+ *   ephemeral auxiliary agents host clients spawn next to the real
+ *   conversation (Claudian's title generation, instruction refinement,
+ *   inline edits) or one-shot `pi --no-session` runs, not project
+ *   conversations, and archiving them would mint junk "User's request …"
+ *   files. The manual /save-conversation command still saves such a session
+ *   on explicit demand; the batch never sees them (no jsonl on disk).
  * - Location: a subfolder of the session's working directory (`ctx.cwd`, the
  *   directory the session was started in), defaulting to `ai-conversations`.
  *   Override with the PI_SAVE_CONVERSATION_DIR environment variable; set it to
@@ -1925,6 +1934,15 @@ export default function (pi: ExtensionAPI) {
 
   // 1. Automatic: save after every settled agent turn.
   pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
+    // Non-persisted sessions (in-memory, `--no-session`) are ephemeral
+    // auxiliary agents — see the skip rule in the header. The manual
+    // /save-conversation command below is the explicit-demand escape hatch.
+    if (!ctx.sessionManager.getSessionFile()) {
+      debug(
+        "agent_settled — session has no session file (in-memory / --no-session); skipping auto-save",
+      );
+      return;
+    }
     debug("agent_settled — saving conversation");
     try {
       const live = liveContext(ctx);
@@ -2005,27 +2023,35 @@ export default function (pi: ExtensionAPI) {
 
     // The live session first, through the normal path: its in-memory tree may
     // be fresher than disk, and its state entry goes through pi.appendEntry.
-    try {
-      const r = await runSave(live);
-      count(r);
-      if (ctx.hasUI) {
-        const target = r.file ? relativeForUser(live, r.file) : "";
-        ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
-        if (r.recovered && r.file) {
-          ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${target}`, "warning");
+    // A non-persisted current session (in-memory / --no-session) is skipped —
+    // see the skip rule in the header.
+    if (!ctx.sessionManager.getSessionFile()) {
+      debug(
+        "/" + COMMAND_ALL + " — current session not persisted (in-memory / --no-session); skipped",
+      );
+    } else {
+      try {
+        const r = await runSave(live);
+        count(r);
+        if (ctx.hasUI) {
+          const target = r.file ? relativeForUser(live, r.file) : "";
+          ctx.ui.notify(`${NOTIFY_TAG} ${r.message}${target ? ` → ${target}` : ""}`, "info");
+          if (r.recovered && r.file) {
+            ctx.ui.notify(`${NOTIFY_TAG} ${r.recovered} → ${target}`, "warning");
+          }
+          if (r.switchedFrom && r.file) {
+            ctx.ui.notify(
+              `${NOTIFY_TAG} branch changed — new branch file ${target}; the earlier branch file ${r.switchedFrom} is kept`,
+              "info",
+            );
+          }
         }
-        if (r.switchedFrom && r.file) {
-          ctx.ui.notify(
-            `${NOTIFY_TAG} branch changed — new branch file ${target}; the earlier branch file ${r.switchedFrom} is kept`,
-            "info",
-          );
+      } catch (e) {
+        failed.push("<current session>");
+        debug("/" + COMMAND_ALL + " live save failed:", String(e));
+        if (ctx.hasUI) {
+          ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
         }
-      }
-    } catch (e) {
-      failed.push("<current session>");
-      debug("/" + COMMAND_ALL + " live save failed:", String(e));
-      if (ctx.hasUI) {
-        ctx.ui.notify(`${NOTIFY_TAG} save failed: ${String(e)}`, "error");
       }
     }
 

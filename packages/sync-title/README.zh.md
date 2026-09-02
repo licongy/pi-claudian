@@ -12,10 +12,11 @@
 
 ## 为什么需要
 
-Claudian 将每个会话的元数据存放在 `.claudian/sessions/conv-*.meta.json` 中（其中包含
-一个自动生成的 `title`），但从不会告知 Pi；而 Pi 的 `/name` 命令也从不会告知 Claudian。
-本扩展在两个方向上补上了这个缺口，并采用一种绝不会静默覆盖你手动设置的名称的冲突解决
-策略。
+Claudian 将每个会话的元数据存放在 `.claudian/sessions/` 下——Claudian 2.2.5 之前创建的
+对话在顶层（`conv-*.meta.json`），之后的则位于按设备划分的子目录
+（`devices/<deviceId>/conv-*.meta.json`）——其中包含一个自动生成的 `title`，但从不会告知
+Pi；而 Pi 的 `/name` 命令也从不会告知 Claudian。本扩展在两个方向上补上了这个缺口，并采用
+一种绝不会静默覆盖你手动设置的名称的冲突解决策略。两种存储布局始终都会被扫描。
 
 ## 安装
 
@@ -59,8 +60,9 @@ Pi 在下次恢复时会读取到。写入前会先展示计划并请你确认�
   排出一条短重试链，其前几次尝试在首条消息出现之前也照常扫描（起步慢的对话不会被放弃）；
   agent_end 每会话至多排出一次同样的链（耗尽后会话被闩锁为非 Claudian，因此纯 `pi` 会话
   不会被逐轮轮询）。**标题等待**（元数据已匹配、标题仍为 pending）以退避重试（总计约
-  2 分钟）兜底，并额外监听 `.claudian/sessions` 目录：Claudian 写入生成标题时，防抖后的
-  reconcile 在毫秒级执行，同步落定后监听即卸载。
+  2 分钟）兜底，并额外监听所匹配元数据所在的目录（sessions 根目录，或新版按设备布局的
+  `devices/<deviceId>/` 子目录）：Claudian 写入生成标题时，防抖后的 reconcile 在毫秒级执行，
+  同步落定后监听即卸载。
 - 优先按 Pi 会话 UUID 匹配 Claudian 元数据文件，回退到 `providerState.sessionFile` 路径
   （经 `fs.realpath` 比较，因此符号链接化的 vault 也能匹配）。
 - **vault 解析**使用会话自身的家目录（`ctx.cwd`，Pi 会将其设为所恢复会话记录的 `cwd`，

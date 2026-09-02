@@ -21,6 +21,10 @@ pi install npm:pi-auto-save-to-markdown
 
 自动：每个 agent 轮次完全结束（`agent_settled`，含自动重试与压缩全部完成）后，当前对话分支写入 `<cwd>/<文件夹>/<标题>-<key>-<时间>.md`。
 
+Pi 未持久化的会话（内存态、`--no-session`——包括宿主客户端在真实对话旁派生的临时辅助
+agent，例如 Claudian 的标题生成）会被所有自动保存路径跳过；只有显式的
+`/save-conversation` 命令才会按需归档此类会话。
+
 手动：运行 `/save-conversation` 立即保存当前分支并显示文件路径。
 
 批量：运行 `/save-conversation-all` 保存**当前项目的全部 session**——即项目的

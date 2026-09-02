@@ -5,7 +5,9 @@
  * conversation metadata.
  *
  * Claudian tracks each pi-provider conversation in
- * `.claudian/sessions/conv-<id>.meta.json`, including the active position in
+ * `.claudian/sessions/conv-<id>.meta.json` (top level, or the per-device
+ * `devices/<deviceId>/` subdirectories Claudian 2.2.5+ files new metas
+ * into), including the active position in
  * Pi's session tree:
  *
  *   meta.sessionId                  = Pi session UUID
@@ -92,7 +94,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
-import { resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
+import { listClaudianMetaFiles, resolveClaudianSessionsDir, samePath } from "./claudian-vault.js";
 
 interface ClaudianProviderState {
   leafEntryId?: string | null;
@@ -123,20 +125,23 @@ interface MetaFile {
 const CLAUDIAN_PROVIDER_PI = "pi";
 
 export default function (pi: ExtensionAPI) {
-  /** Read every conv-*.meta.json in a Claudian sessions dir (skipping corrupt/mid-write files). */
+  /**
+   * Read every conv-*.meta.json in a Claudian sessions dir, across both
+   * storage layouts (top level and the per-device `devices/<deviceId>/`
+   * subdirectories — see listClaudianMetaFiles), skipping corrupt/mid-write
+   * files.
+   */
   async function readAllMetas(sessionsDir: string): Promise<MetaFile[]> {
     let files: string[] = [];
     try {
-      files = await fs.readdir(sessionsDir);
+      files = await listClaudianMetaFiles(sessionsDir);
     } catch {
       debug("sessions dir unreadable:", sessionsDir);
       return [];
     }
 
     const out: MetaFile[] = [];
-    for (const f of files) {
-      if (!f.endsWith(".meta.json")) continue;
-      const fullPath = path.join(sessionsDir, f);
+    for (const fullPath of files) {
       try {
         const meta = JSON.parse(await fs.readFile(fullPath, "utf-8")) as ClaudianMeta;
         out.push({ meta, file: fullPath });

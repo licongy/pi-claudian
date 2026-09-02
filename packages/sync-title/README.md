@@ -13,11 +13,13 @@ Pi `/name` command.
 
 ## Why
 
-Claudian stores per-conversation metadata under `.claudian/sessions/conv-*.meta.json`
-(including an auto-generated `title`) but never tells Pi about it, and Pi's
-`/name` command never tells Claudian. This extension closes that gap in both
-directions, with conflict resolution that never silently overwrites a name you
-set yourself.
+Claudian stores per-conversation metadata under `.claudian/sessions/` — at the
+top level (`conv-*.meta.json`) for conversations created before Claudian 2.2.5,
+and in per-device subdirectories (`devices/<deviceId>/conv-*.meta.json`) for
+newer ones (including an auto-generated `title`) — but never tells Pi about it,
+and Pi's `/name` command never tells Claudian. This extension closes that gap in
+both directions, with conflict resolution that never silently overwrites a name
+you set yourself. Both storage layouts are always scanned.
 
 ## Installation
 
@@ -72,9 +74,11 @@ Notes:
   session (after it runs out the session is latched as non-Claudian, so plain
   `pi` sessions are not re-polled every turn). The **title wait** (meta matched,
   title still pending) keeps the backoff retries (~2 minutes total) as a
-  backstop and additionally watches the `.claudian/sessions` directory: when
-  Claudian writes the generated title, a debounced reconcile runs within
-  milliseconds and the watcher is torn down once the sync settles.
+  backstop and additionally watches the matched meta's own directory (the
+  sessions root, or its `devices/<deviceId>/` subdirectory for the newer
+  per-device layout): when Claudian writes the generated title, a debounced
+  reconcile runs within milliseconds and the watcher is torn down once the
+  sync settles.
 - Matches the Claudian meta file by Pi session UUID first, falling back to the
   `providerState.sessionFile` path (compared through `fs.realpath`, so symlinked
   vaults match).

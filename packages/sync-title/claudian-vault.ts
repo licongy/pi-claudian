@@ -1,7 +1,11 @@
 /**
  * Claudian vault resolution for @pi-claudian extensions.
  *
- * Claudian stores conversation metadata under `<vault>/.claudian/sessions/`.
+ * Claudian stores conversation metadata under `<vault>/.claudian/sessions/`:
+ * metas created by Claudian 2.2.5+ live in per-device subdirectories
+ * (`sessions/devices/<deviceId>/conv-*.meta.json`), older ones — and
+ * conversations created before that switch — at the top level
+ * (`sessions/conv-*.meta.json`). See listClaudianMetaFiles.
  * Earlier extensions assumed `process.cwd()` *is* the vault root. That breaks
  * when Pi is launched from a sub-directory and a Claudian session is resumed:
  * Pi sets the extension's `ctx.cwd` to the *session's* recorded home directory
@@ -24,11 +28,13 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { debug } from "./debug.js";
 
 const SESSIONS_REL = path.join(".claudian", "sessions");
+const DEVICES_SUBDIR = "devices";
 
 // pi's cwd is fixed for the lifetime of a process, so a single cached lookup
 // is enough. If a different start path is ever seen it simply re-walks.
@@ -69,6 +75,48 @@ export async function resolveClaudianSessionsDir(
   cachedSessionsDir = undefined;
   debug("no .claudian/sessions enclosing", start, "— not a Claudian environment");
   return undefined;
+}
+
+/**
+ * List every conversation meta file in a Claudian sessions dir, across both
+ * storage layouts: the top level (`sessions/conv-*.meta.json` — all Claudian
+ * versions, and newer ones for conversations created before the switch) and
+ * each per-device subdirectory (`sessions/devices/<deviceId>/` — where
+ * Claudian 2.2.5+ files new conversations' metas). A conversation's meta
+ * lives in exactly one of the two locations, so callers must scan both.
+ * Order: top level first, then device subdirectories in name order.
+ *
+ * Only `*.meta.json` files are returned. Unreadable device subdirectories are
+ * skipped; a missing `devices/` layout degrades to the top level alone. An
+ * unreadable sessions root propagates its error to the caller.
+ */
+export async function listClaudianMetaFiles(sessionsDir: string): Promise<string[]> {
+  const collect = async (dir: string): Promise<string[]> => {
+    const entries: Dirent[] = await fs.readdir(dir, { withFileTypes: true });
+    const files: string[] = [];
+    for (const e of entries) {
+      if (e.isFile() && e.name.endsWith(".meta.json")) files.push(path.join(dir, e.name));
+    }
+    return files;
+  };
+
+  const out: string[] = [...(await collect(sessionsDir))];
+
+  let devices: Dirent[] = [];
+  try {
+    devices = await fs.readdir(path.join(sessionsDir, DEVICES_SUBDIR), { withFileTypes: true });
+  } catch {
+    // no per-device layout (older Claudian) — top level only
+  }
+  const deviceDirs = devices
+    .filter((d) => d.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const d of deviceDirs) {
+    out.push(...(await collect(path.join(sessionsDir, DEVICES_SUBDIR, d.name))));
+  }
+
+  debug("listed", out.length, "claudian meta file(s) under", sessionsDir);
+  return out;
 }
 
 /**
