@@ -92,11 +92,11 @@ original creation timestamp — and rewrites the frontmatter title and the
 document heading to match. The rename happens at most once: later `/name`
 changes never touch the filename, and manually renamed files are left alone.
 
-```markdown
+````markdown
 ---
 title: "Fix login redirect loop"
 agent: "pi"
-format_version: "1.5"
+format_version: "1.6"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -141,21 +141,27 @@ I'll trace the middleware order first.
 > [!quote]- Tool Calls · 1 (read)
 > **`read`** `{"filePath":"/Users/me/project/src/auth/middleware.ts"}`
 >
-> > `import { NextResponse } from "next/server"; export function middleware(…) …`
+> ```
+> import { NextResponse } from "next/server";
+> export function middleware(…) …
+> ```
 
 ---
-```
+````
 
 The body renders user and assistant messages in full (assistant thinking and
 per-turn tool calls are each folded into a collapsed Obsidian callout —
-`> [!tldr]- Thinking` and `> [!quote]- Tool Calls · …`) and summarizes each
-tool call and result in one line, so the file stays readable while still
-showing what the agent did. Callouts are used instead of HTML `<details>`
-because Obsidian renders markdown inside HTML blocks unreliably; outside
-Obsidian the callouts degrade to plain blockquotes. Result and argument
-previews are wrapped in inline code spans (with a delimiter sized to survive
-backticks inside the content), so raw tool output renders literally instead of
-being parsed as markdown.
+`> [!tldr]- Thinking` and `> [!quote]- Tool Calls · …`), recording every tool
+call with its full raw result: the file is a documentary record that may be
+@-referenced back into a conversation, and a truncated half-result would be
+wasted when the tool is called again and misleading when it is not, while
+local reading (grep, ranged reads) makes size a non-issue. Callouts are used
+instead of HTML `<details>` because Obsidian renders markdown inside HTML
+blocks unreliably; outside Obsidian the callouts degrade to plain blockquotes.
+Arguments render as full JSON in inline code spans and results verbatim —
+whitespace intact, nothing capped — in fenced code blocks (with a delimiter
+sized to survive backticks inside the content), so raw tool output renders
+literally instead of being parsed as markdown.
 
 Prompt blocks the client or the agent injects into a user message — the
 editor's active selection, attached or referenced notes, loaded skills — are

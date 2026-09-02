@@ -28,6 +28,19 @@ export function inlineCode(text: string): string {
 }
 
 /**
+ * Fenced code block for arbitrary raw output (full tool results): the fence
+ * is always one backtick longer than the longest backtick run inside the
+ * text (and at least three), so content that itself contains backticks
+ * cannot break out of the block. Tool output renders literally, whitespace
+ * intact, instead of being parsed as markdown.
+ */
+export function fencedCode(text: string): string {
+  const longest = (text.match(/`+/g) ?? []).reduce((a, r) => Math.max(a, r.length), 0);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}\n${text}\n${fence}`;
+}
+
+/**
  * Obsidian callout (`> [!type]- title`) wrapping a markdown body: every body
  * line is prefixed with `>` (empty lines become bare `>`), so the body keeps
  * rendering as markdown while folding works in both Obsidian views. Outside

@@ -66,11 +66,11 @@ PI_SAVE_CONVERSATION_DIR=notes/ai pi
 
 会话的真实名称在建文件之后才到达时（如 Claudian 在首轮回复后才生成标题），下一次保存会把文件一次性改名为 `<名称>-<key>-<原时间戳>.md`（保留原创建时间戳），并同步改写 frontmatter 标题与正文标题。改名至多发生一次：之后的 `/name` 改名不再影响文件名，手动整理过的文件名也不会被动。
 
-```markdown
+````markdown
 ---
 title: "修复登录重定向死循环"
 agent: "pi"
-format_version: "1.5"
+format_version: "1.6"
 session_id: "d0a4f541-976d-4d1b-8e1c-30a1f2b3c4d5"
 session_key: "c2088d77"
 branch_last_entry_id: "019be3a2-1f4d-7c8a-9b01-d23e45f6a7b8"
@@ -115,19 +115,24 @@ Assistant <span style="font-size: 0.5em; color: var(--text-faint);">2026-08-29 1
 > [!quote]- Tool Calls · 1 (read)
 > **`read`** `{"filePath":"/Users/me/project/src/auth/middleware.ts"}`
 >
-> > `import { NextResponse } from "next/server"; export function middleware(…) …`
+> ```
+> import { NextResponse } from "next/server";
+> export function middleware(…) …
+> ```
 
 ---
-```
+````
 
 正文完整渲染 user / assistant 消息（assistant 的 thinking 与每轮工具调用
 分别折叠在可折叠的 Obsidian callout 中——`> [!tldr]- Thinking` 和
-`> [!quote]- Tool Calls · …`），每个工具调用和结果各压缩成一行摘要，既可读
-又能看出 agent 做了什么。之所以用 callout 而不是 HTML `<details>`，是因为
-Obsidian 对 HTML 块内嵌 Markdown 的渲染不可靠；在非 Obsidian 环境下 callout
-退化为普通引用块。结果与参数预览会包在 inline code 里（分隔符长度会自动
-压过内容中的反引号序列），工具的原始输出因此按字面渲染，不会被当作
-Markdown 解析。
+`> [!quote]- Tool Calls · …`），每次工具调用连同其完整原始结果一起记录：
+归档文件是可能被 @ 引回对话的史料，截断的半个结果在工具重调时是浪费、在
+不再调用时是误导，而局部阅读（grep、按行段读取）让体积不成问题。之所以用
+callout 而不是 HTML `<details>`，是因为 Obsidian 对 HTML 块内嵌 Markdown 的
+渲染不可靠；在非 Obsidian 环境下 callout 退化为普通引用块。参数以完整 JSON
+包在 inline code 里，结果逐字保真——空白原样、不截断——放在 fenced code
+block 中（分隔符长度会自动压过内容中的反引号序列），工具的原始输出因此按
+字面渲染，不会被当作 Markdown 解析。
 
 客户端或 agent 注入到用户消息中的提示块——编辑器当前选区、附加或引用的
 笔记、加载的 skill——会从原始 XML（Obsidian 无法渲染，只会显示成裸露的

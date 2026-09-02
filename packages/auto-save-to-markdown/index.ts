@@ -51,18 +51,22 @@
  *   wrapped in single blank lines.
  * - Tool call/result folding: calls live in the assistant entry while their
  *   results are separate toolResult entries; saves pair them by toolCall id
- *   and fold each assistant block's calls, with a short result preview each,
- *   into one collapsed Obsidian callout (`> [!quote]- Tool Calls · …`).
- *   Thinking folds the same way into `> [!tldr]- Thinking`. Callouts are used
- *   instead of HTML `<details>` because Obsidian's views render embedded
- *   markdown inside HTML blocks unreliably, while callouts fold and render
- *   markdown in both Live Preview and Reading view. Outside Obsidian the
- *   callouts degrade to plain blockquotes. Argument previews and result
- *   previews are wrapped in inline code spans (delimiter sized to survive
- *   backticks inside the content), so raw output renders literally instead
- *   of being parsed as markdown. A result whose call was saved in
- *   an earlier file (mid-turn manual save) falls back to a standalone
- *   one-line block.
+ *   and fold each assistant block's calls, with their FULL results, into one
+ *   collapsed Obsidian callout (`> [!quote]- Tool Calls · …`). Thinking folds
+ *   the same way into `> [!tldr]- Thinking`. Callouts are used instead of
+ *   HTML `<details>` because Obsidian's views render embedded markdown
+ *   inside HTML blocks unreliably, while callouts fold and render markdown
+ *   in both Live Preview and Reading view. Outside Obsidian the callouts
+ *   degrade to plain blockquotes. Arguments render as full JSON in inline
+ *   code spans and results verbatim — whitespace intact, nothing capped —
+ *   in fenced code blocks (delimiters sized to survive backticks inside the
+ *   content), so raw output renders literally instead of being parsed as
+ *   markdown. Nothing is truncated because the file is a documentary record
+ *   that may be @-referenced back into a conversation: a half result is
+ *   wasted when the tool is called again and misleading when it is not,
+ *   while local reading (grep, ranged reads) makes size a non-issue. A
+ *   result whose call was saved in an earlier file (mid-turn manual save)
+ *   renders as a standalone block with the same full content.
  * - Injected prompt blocks: the host client and the agent runtime append
  *   machine-readable XML to user messages — the editor's active selection
  *   (CDATA content), note references and attachments (linked_note /
@@ -194,7 +198,13 @@ import * as fsSync from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { debug } from "./debug.js";
-import { callout, inlineCode, renderUserMessageText, stripInjectedBlocks } from "./markdown.js";
+import {
+  callout,
+  fencedCode,
+  inlineCode,
+  renderUserMessageText,
+  stripInjectedBlocks,
+} from "./markdown.js";
 
 const CUSTOM_TYPE = "pi-claudian-auto-save-markdown";
 const ENV_SUBDIR = "PI_SAVE_CONVERSATION_DIR";
@@ -234,7 +244,7 @@ const SAVE_STATE_SCHEMA = "1.2";
  * the frontmatter and the document heading); additive frontmatter fields do
  * NOT bump it — they are invisible to any within-major parser.
  */
-const FORMAT_VERSION = "1.5";
+const FORMAT_VERSION = "1.6";
 
 /**
  * Package version of this extension, read best-effort from the adjacent
@@ -255,9 +265,6 @@ const EXTENSION_VERSION: string | null = (() => {
 
 const MAX_TITLE_LENGTH = 60;
 const TITLE_FALLBACK_LENGTH = 40;
-const TOOL_RESULT_PREVIEW = 500;
-const TOOL_ARGS_PREVIEW = 160;
-
 type AgentMessage = SessionMessageEntry["message"];
 type UserMessage = Extract<AgentMessage, { role: "user" }>;
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -959,15 +966,13 @@ export default function (pi: ExtensionAPI) {
     return "untitled";
   }
 
-  function previewArgs(args: unknown): string {
-    let s: string;
+  /** Full argument JSON on one line (JSON.stringify escapes newlines), never truncated. */
+  function renderArgs(args: unknown): string {
     try {
-      s = JSON.stringify(args) ?? "";
+      return JSON.stringify(args) ?? "";
     } catch {
-      s = String(args);
+      return String(args);
     }
-    s = s.replace(/\s+/g, " ").trim();
-    return s.length > TOOL_ARGS_PREVIEW ? s.slice(0, TOOL_ARGS_PREVIEW) + " …" : s;
   }
 
   // ---------- markdown rendering ----------
@@ -981,30 +986,37 @@ export default function (pi: ExtensionAPI) {
     return s.replace(/^(?:[ \t]*\n)+/, "").replace(/\s+$/, "");
   }
 
-  /** One tool call with its paired result preview (null when no result entry exists). */
+  /** One tool call with its paired full result (null when no result entry exists). */
   interface RenderedToolCall {
     name: string;
     args: string;
     result: string | null;
+    error: boolean;
   }
 
-  /** Flattened, length-capped result preview with error status suffix. */
-  function resultPreview(m: ToolResultMessage): string {
+  /**
+   * Full raw result text: text blocks joined with blank lines, non-text
+   * blocks as placeholders. Error status stays OUT of the content (it rides
+   * the call's head line) so the saved text is exactly what the tool
+   * returned.
+   */
+  function resultText(m: ToolResultMessage): string {
     const texts: string[] = [];
     for (const b of m.content) {
       if (b.type === "text") texts.push(b.text);
       else texts.push(`_[image: ${b.mimeType}]_`);
     }
-    const flat = texts.join(" ").replace(/\s+/g, " ").trim();
-    const capped =
-      flat.length > TOOL_RESULT_PREVIEW ? flat.slice(0, TOOL_RESULT_PREVIEW) + " …" : flat;
-    const status = m.isError ? " (error)" : "";
-    return `${capped}${status}`.trim();
+    return texts.join("\n\n").trim();
   }
 
-  /** Standalone one-line block for a result whose call is not in this file. */
+  /**
+   * Standalone block for a result whose call is not in this file — same full
+   * content as folded results.
+   */
   function renderToolResult(m: ToolResultMessage): string {
-    return `> **Tool · ${m.toolName}** ${inlineCode(resultPreview(m))}`.trim();
+    const text = resultText(m);
+    const err = m.isError ? " (error)" : "";
+    return `**Tool · ${m.toolName}**${err}\n\n${text ? fencedCode(text) : "_(empty result)_"}`;
   }
 
   /** "read, web_search ×2" — tool names with repeat counts, first-seen order. */
@@ -1016,16 +1028,20 @@ export default function (pi: ExtensionAPI) {
 
   /**
    * Fold tool calls and their paired results into one collapsed callout.
-   * Argument JSON and result previews are wrapped in inline code spans, so
-   * raw output renders literally instead of being parsed as markdown.
+   * Arguments render as full JSON in inline code spans and results verbatim
+   * in fenced code blocks, so raw output renders literally instead of being
+   * parsed as markdown.
    */
   function renderToolCallsCallout(calls: RenderedToolCall[]): string {
     const summary = summarizeToolNames(calls.map((c) => c.name));
     const items = calls.map((c) => {
-      const head = c.args ? `**\`${c.name}\`** ${inlineCode(c.args)}` : `**\`${c.name}\`**`;
+      const err = c.error ? " (error)" : "";
+      const head = c.args
+        ? `**\`${c.name}\`**${err} ${inlineCode(c.args)}`
+        : `**\`${c.name}\`**${err}`;
       const result =
-        c.result === null ? "_(no result)_" : inlineCode(c.result || "_(empty result)_");
-      return `${head}\n\n> ${result}`;
+        c.result === null ? "_(no result)_" : c.result ? fencedCode(c.result) : "_(empty result)_";
+      return `${head}\n\n${result}`;
     });
     return callout("quote", `Tool Calls · ${calls.length} (${summary})`, items.join("\n\n"));
   }
@@ -1061,8 +1077,9 @@ export default function (pi: ExtensionAPI) {
         results.delete(b.id);
         calls.push({
           name: b.name,
-          args: previewArgs(b.arguments),
-          result: r ? resultPreview(r) : null,
+          args: renderArgs(b.arguments),
+          result: r ? resultText(r) : null,
+          error: r ? r.isError : false,
         });
       }
     }
