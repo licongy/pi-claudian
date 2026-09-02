@@ -184,6 +184,21 @@ left verbatim, so XML pasted as content is never mangled — and the fallback
 filename slug derives from the typed message with every known block
 stripped.
 
+The recognized injected-block vocabulary:
+
+| XML tag             | Renders as                    | What it carries                                 |
+| ------------------- | ----------------------------- | ----------------------------------------------- |
+| `editor_selection`  | `[!quote]-` Editor Selection  | Selection in the code editor                    |
+| `editor_cursor`     | `[!quote]-` Editor Cursor     | Cursor position in the editor                   |
+| `current_note`      | `[!quote]-` Current Note      | The currently open note                         |
+| `context_files`     | `[!quote]-` Context Files     | Files attached as context                       |
+| `canvas_selection`  | `[!quote]-` Canvas Selection  | Selection on the canvas                         |
+| `browser_selection` | `[!quote]-` Browser Selection | Selection in the browser view                   |
+| `linked_note`       | `[!quote]-` Linked Note       | A note reference (the @-mention's machine copy) |
+| `linked_content`    | `[!quote]-` Linked Content    | An attached note's content                      |
+| `skill`             | `[!note]-` Skill · `<name>`   | Loaded-skill marker; content dropped            |
+| any other tag       | verbatim                      | Pasted XML is never mangled                     |
+
 Each message block opens with a setext level-1 info header (`User`,
 `Assistant`) underlined with `===` — one level above the `##` headings AI
 content typically starts with, and distinguishable from content `#` headings

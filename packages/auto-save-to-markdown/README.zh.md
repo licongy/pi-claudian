@@ -149,6 +149,21 @@ block 中（分隔符长度会自动压过内容中的反引号序列），工�
 XML 内容绝不会被误改；回退文件名 slug 也从剥离全部已知块后的纯键入文本
 推导。
 
+当前识别的注入块标签清单：
+
+| XML 标签            | 渲染为                        | 内容                          |
+| ------------------- | ----------------------------- | ----------------------------- |
+| `editor_selection`  | `[!quote]-` Editor Selection  | 代码编辑器中的选区            |
+| `editor_cursor`     | `[!quote]-` Editor Cursor     | 编辑器中的光标位置            |
+| `current_note`      | `[!quote]-` Current Note      | 当前打开的笔记                |
+| `context_files`     | `[!quote]-` Context Files     | 附加为上下文的文件            |
+| `canvas_selection`  | `[!quote]-` Canvas Selection  | 画布中的选区                  |
+| `browser_selection` | `[!quote]-` Browser Selection | 浏览器视图中的选区            |
+| `linked_note`       | `[!quote]-` Linked Note       | 笔记引用（@ 提及的机器副本）  |
+| `linked_content`    | `[!quote]-` Linked Content    | 附加笔记的内容                |
+| `skill`             | `[!note]-` Skill · `<名称>`   | 已加载 skill 的标记；内容丢弃 |
+| 其他任何标签        | 原样保留                      | 粘贴的 XML 绝不会被误改       |
+
 每个消息块以 setext 一级信息头（`User`、`Assistant`，下一行以 `===` 下划）
 开头——高于 AI 内容常见的 `##` 二级标题，解析时也能与内容中的 `#` 一级标题
 区分开。信息头的元数据（本地日期时间，assistant 消息还带模型名）放在一个小号
