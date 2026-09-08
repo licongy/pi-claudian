@@ -8,9 +8,7 @@
 
 A monorepo of independently-published [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) extensions for collaborating with [Claudian](https://github.com/claudian).
 
-Each extension lives in its own package under `packages/*` and is published to
-npm as TypeScript source (Pi loads it via jiti, no build step), so you can
-install only what you need:
+Each extension lives in its own package under `packages/*` and is published to npm as TypeScript source (Pi loads it via jiti, no build step), so you can install only what you need:
 
 ```
 pi install npm:<package-name>
@@ -18,11 +16,11 @@ pi install npm:<package-name>
 
 ## Extensions
 
-| Package                                                      | Description                                                                                                                                                                |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`@pi-claudian/sync-title`](packages/sync-title)             | Sync Claudian conversation titles into Pi session names so they appear in `/resume`.                                                                                       |
-| [`@pi-claudian/sync-session`](packages/sync-session)         | Sync Pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.                                                                               |
-| [`pi-auto-save-to-markdown`](packages/auto-save-to-markdown) | Auto-save every completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch. Not Claudian-specific — works with any Pi session. |
+| Package                                                                      | Description                                                                                                                                                                |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@pi-claudian/sync-title`](packages/sync-title)                             | Sync Claudian conversation titles into Pi session names so they appear in `/resume`.                                                                                       |
+| [`@pi-claudian/sync-session`](packages/sync-session)                         | Sync Pi `/tree`, `/clone` and `/fork` session changes into Claudian's conversation metadata.                                                                               |
+| [`pi-auto-save-session-to-markdown`](packages/auto-save-session-to-markdown) | Auto-save every completed conversation turn as a markdown file with YAML frontmatter, one file per session-tree branch. Not Claudian-specific — works with any Pi session. |
 
 ## Development
 
@@ -37,17 +35,14 @@ pnpm format       # fix formatting with prettier
 
 ## Debugging
 
-All `@pi-claudian` extensions support a shared debug switch. Set one environment
-variable to trace every extension on stderr (never mixed with pi's stdout):
+All `@pi-claudian` extensions support a shared debug switch. Set one environment variable to trace every extension on stderr (never mixed with pi's stdout):
 
 ```sh
 PI_CLAUDIAN_DEBUG=1 pi              # show debug output inline
 PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # capture to a file
 ```
 
-Any value other than an explicit false token (empty, `0`, `false`, `no`, `off` —
-case-insensitive) enables it; unset the variable (or set one of those tokens)
-to turn it off.
+Any value other than an explicit false token (empty, `0`, `false`, `no`, `off` — case-insensitive) enables it; unset the variable (or set one of those tokens) to turn it off.
 
 ## Releasing
 
@@ -61,11 +56,7 @@ pnpm run release    # publish all changed packages to npm
 
 See [`.changeset/README.md`](.changeset/README.md) for details.
 
-> Both `pnpm run version` and `pnpm run release` require a clean working tree
-> (`scripts/check-clean.mjs`). This prevents publishing from a state that the
-> release's git tag does not point at — the most common cause is forgetting to
-> commit source/changeset files before versioning, or the version bump before
-> publishing. Typical flow:
+> Both `pnpm run version` and `pnpm run release` require a clean working tree (`scripts/check-clean.mjs`). This prevents publishing from a state that the release's git tag does not point at — the most common cause is forgetting to commit source/changeset files before versioning, or the version bump before publishing. Typical flow:
 >
 > ```sh
 > pnpm run changeset && git add -A && git commit -m "add changeset"   # commit the change + changeset
@@ -75,8 +66,7 @@ See [`.changeset/README.md`](.changeset/README.md) for details.
 
 ## Contributing
 
-Contributions are welcome — bug reports, feature ideas, new extensions, or fixes.
-See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+Contributions are welcome — bug reports, feature ideas, new extensions, or fixes. See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 Quick links:
 
@@ -84,8 +74,7 @@ Quick links:
 - [Start a discussion](https://github.com/licongy/pi-claudian/discussions)
 - Look for [`good first issue`](https://github.com/licongy/pi-claudian/labels/good%20first%20issue) / [`help wanted`](https://github.com/licongy/pi-claudian/labels/help%20wanted) labels
 
-New to the codebase? [`packages/sync-title`](packages/sync-title) is a minimal,
-up-to-date template to copy when adding an extension.
+New to the codebase? [`packages/sync-title`](packages/sync-title) is a minimal, up-to-date template to copy when adding an extension.
 
 ## License
 

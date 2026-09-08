@@ -6,11 +6,9 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-一个由独立发布的 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 扩展组成的
-monorepo，用于与 [Claudian](https://github.com/claudian) 协作。
+一个由独立发布的 [Pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) 扩展组成的 monorepo，用于与 [Claudian](https://github.com/claudian) 协作。
 
-每个扩展都位于 `packages/*` 下各自的包中，并以 TypeScript 源码形式发布到 npm（Pi 通过 jiti
-加载，无需构建步骤），因此你只需安装所需的部分：
+每个扩展都位于 `packages/*` 下各自的包中，并以 TypeScript 源码形式发布到 npm（Pi 通过 jiti 加载，无需构建步骤），因此你只需安装所需的部分：
 
 ```
 pi install npm:<package-name>
@@ -18,11 +16,11 @@ pi install npm:<package-name>
 
 ## 扩展
 
-| 包                                                           | 描述                                                                                                                         |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| [`@pi-claudian/sync-title`](packages/sync-title)             | 将 Claudian 的会话标题同步到 Pi 的会话名称中，使其出现在 `/resume` 里。                                                      |
-| [`@pi-claudian/sync-session`](packages/sync-session)         | 将 Pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。                                               |
-| [`pi-auto-save-to-markdown`](packages/auto-save-to-markdown) | 每轮对话完成后自动保存为带 YAML frontmatter 的 markdown 文件，每个会话树分支一个文件。与 Claudian 无关，适用于任何 Pi 会话。 |
+| 包                                                                           | 描述                                                                                                                         |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| [`@pi-claudian/sync-title`](packages/sync-title)                             | 将 Claudian 的会话标题同步到 Pi 的会话名称中，使其出现在 `/resume` 里。                                                      |
+| [`@pi-claudian/sync-session`](packages/sync-session)                         | 将 Pi 的 `/tree`、`/clone` 与 `/fork` 会话变更同步到 Claudian 的会话元数据中。                                               |
+| [`pi-auto-save-session-to-markdown`](packages/auto-save-session-to-markdown) | 每轮对话完成后自动保存为带 YAML frontmatter 的 markdown 文件，每个会话树分支一个文件。与 Claudian 无关，适用于任何 Pi 会话。 |
 
 ## 开发
 
@@ -37,21 +35,18 @@ pnpm format       # 用 prettier 修复格式
 
 ## 调试
 
-所有 `@pi-claudian` 扩展共享一个调试开关。设置一个环境变量即可在 stderr 上追踪每个扩展
-（绝不会与 Pi 的 stdout 混在一起）：
+所有 `@pi-claudian` 扩展共享一个调试开关。设置一个环境变量即可在 stderr 上追踪每个扩展（绝不会与 Pi 的 stdout 混在一起）：
 
 ```sh
 PI_CLAUDIAN_DEBUG=1 pi              # 内联显示调试输出
 PI_CLAUDIAN_DEBUG=1 pi 2>debug.log  # 捕获到文件
 ```
 
-除显式假值（空串、`0`、`false`、`no`、`off`，忽略大小写）以外的任何值都会开启
-调试；取消该变量或将其设为其中某个假值即可关闭。
+除显式假值（空串、`0`、`false`、`no`、`off`，忽略大小写）以外的任何值都会开启调试；取消该变量或将其设为其中某个假值即可关闭。
 
 ## 发布
 
-本仓库使用 [Changesets](https://github.com/changesets/changesets) 对每个扩展进行独立的版本
-管理与发布。
+本仓库使用 [Changesets](https://github.com/changesets/changesets) 对每个扩展进行独立的版本管理与发布。
 
 ```sh
 pnpm run changeset  # 描述一次变更（生成一个 changeset 文件）
@@ -61,9 +56,7 @@ pnpm run release    # 发布所有有变更的包到 npm
 
 详见 [`.changeset/README.md`](.changeset/README.md)。
 
-> `pnpm run version` 与 `pnpm run release` 均要求工作区是干净的
-> （`scripts/check-clean.mjs`）。这能避免从一个发布标签所不指向的状态进行发布——最常见的
-> 原因是在版本化前忘记提交源码/changeset 文件，或在发布前忘记提交版本升级。典型流程：
+> `pnpm run version` 与 `pnpm run release` 均要求工作区是干净的（`scripts/check-clean.mjs`）。这能避免从一个发布标签所不指向的状态进行发布——最常见的原因是在版本化前忘记提交源码/changeset 文件，或在发布前忘记提交版本升级。典型流程：
 >
 > ```sh
 > pnpm run changeset && git add -A && git commit -m "add changeset"   # 提交变更 + changeset
@@ -73,18 +66,15 @@ pnpm run release    # 发布所有有变更的包到 npm
 
 ## 贡献
 
-欢迎各种贡献——bug 报告、功能想法、新扩展或修复。入门请参阅
-[CONTRIBUTING.md](CONTRIBUTING.md)。
+欢迎各种贡献——bug 报告、功能想法、新扩展或修复。入门请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 快捷入口：
 
 - [提交 issue](https://github.com/licongy/pi-claudian/issues)
 - [发起讨论](https://github.com/licongy/pi-claudian/discussions)
-- 留意 [`good first issue`](https://github.com/licongy/pi-claudian/labels/good%20first%20issue) /
-  [`help wanted`](https://github.com/licongy/pi-claudian/labels/help%20wanted) 标签
+- 留意 [`good first issue`](https://github.com/licongy/pi-claudian/labels/good%20first%20issue) / [`help wanted`](https://github.com/licongy/pi-claudian/labels/help%20wanted) 标签
 
-刚接触本代码库？[`packages/sync-title`](packages/sync-title) 是一个极简、保持最新模板，新增
-扩展时可直接照搬。
+刚接触本代码库？[`packages/sync-title`](packages/sync-title) 是一个极简、保持最新模板，新增扩展时可直接照搬。
 
 ## 许可证
 

@@ -1,4 +1,6 @@
-# pi-auto-save-to-markdown
+# pi-auto-save-session-to-markdown
+
+Previously published as `pi-auto-save-to-markdown` — see the 0.10.0 entry.
 
 ## 0.9.2
 

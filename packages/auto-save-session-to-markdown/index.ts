@@ -1,5 +1,5 @@
 /**
- * pi-auto-save-to-markdown
+ * pi-auto-save-session-to-markdown
  *
  * Automatically saves the current conversation to a markdown file after every
  * completed agent turn, with session metadata in a YAML frontmatter block.
@@ -178,7 +178,7 @@
  *   byte-identical to what pi's own appendCustomEntry would write).
  *
  * Installation:
- *   pi install npm:pi-auto-save-to-markdown
+ *   pi install npm:pi-auto-save-session-to-markdown
  *
  * Debug:
  *   PI_CLAUDIAN_DEBUG=1 pi
@@ -1987,7 +1987,7 @@ export default function (pi: ExtensionAPI) {
   // 2. Manual: force a save now and report where it went.
   pi.registerCommand(COMMAND, {
     description:
-      "Save the current conversation branch to a markdown file now (pi-auto-save-to-markdown)",
+      "Save the current conversation branch to a markdown file now (pi-auto-save-session-to-markdown)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /" + COMMAND + " invoked");
@@ -2176,7 +2176,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand(COMMAND_ALL, {
     description:
-      "Save every session of this project to markdown files now (pi-auto-save-to-markdown)",
+      "Save every session of this project to markdown files now (pi-auto-save-session-to-markdown)",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
       try {
         debug("manual /" + COMMAND_ALL + " invoked");
