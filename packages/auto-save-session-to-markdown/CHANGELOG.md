@@ -1,5 +1,11 @@
 # pi-auto-save-session-to-markdown
 
+## 0.10.1
+
+### Patch Changes
+
+- d786465: Title derivation now skips a first user message that is only injected blocks (an attachment or note reference with no typed text) and reads the typed text of a later message instead: such sessions previously fell back to the "untitled" filename and title even when real typed text existed a message later.
+
 ## 0.10.0
 
 ### Minor Changes
