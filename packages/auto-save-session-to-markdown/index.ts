@@ -933,8 +933,12 @@ export default function (pi: ExtensionAPI) {
       if (e.message.role === "user") {
         // Title derivation reads the plain typed message — every known
         // injected block (see markdown.ts) is stripped, mirroring how the
-        // client strips the same blocks for its own session titles.
-        return stripInjectedBlocks(userText(e.message.content)) || undefined;
+        // client strips the same blocks for its own session titles. A first
+        // message that is only injected blocks (an attachment with no typed
+        // text) is skipped, so a later message's typed text still titles the
+        // session instead of everything falling back to "untitled".
+        const text = stripInjectedBlocks(userText(e.message.content));
+        if (text) return text;
       }
     }
     return undefined;
