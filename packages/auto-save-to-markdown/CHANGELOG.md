@@ -1,4 +1,4 @@
-# pi-auto-save-session-to-markdown
+# pi-auto-save-to-markdown
 
 ## 0.10.1
 

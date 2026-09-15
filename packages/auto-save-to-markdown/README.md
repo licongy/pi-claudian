@@ -1,6 +1,6 @@
-# pi-auto-save-session-to-markdown
+# pi-auto-save-to-markdown
 
-[![npm version](https://img.shields.io/npm/v/pi-auto-save-session-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/pi-auto-save-session-to-markdown)
+[![npm version](https://img.shields.io/npm/v/pi-auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/pi-auto-save-to-markdown)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [English](README.md) | [中文](README.zh.md)
@@ -14,7 +14,7 @@ Pi records sessions internally as JSONL trees, which are great for resuming but 
 ## Installation
 
 ```
-pi install npm:pi-auto-save-session-to-markdown
+pi install npm:pi-auto-save-to-markdown
 ```
 
 ## Usage
@@ -146,11 +146,11 @@ Each message block opens with a setext level-1 info header (`User`, `Assistant`)
 
 Two views of the same saved file rendered in Obsidian — the `<title>-<key>-<time>.md` filename on top, message blocks with role headers and timestamps, and the Thinking and Tool Calls callouts collapsed. First with the Properties panel expanded, showing all frontmatter fields:
 
-![A saved conversation file rendered in Obsidian with the Properties panel expanded: filename in the title-key-time pattern, all frontmatter fields visible as properties (title, agent, format version, session id, cost, tokens, timestamps, project root, session file), and the beginning of the message body](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-session-to-markdown/screenshot-1.png)
+![A saved conversation file rendered in Obsidian with the Properties panel expanded: filename in the title-key-time pattern, all frontmatter fields visible as properties (title, agent, format version, session id, cost, tokens, timestamps, project root, session file), and the beginning of the message body](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-1.png)
 
 Then with the Properties panel folded away and the full conversation body in view:
 
-![A saved conversation file rendered in Obsidian: filename in the title-key-time pattern, frontmatter folded into the Properties panel, message blocks with role headers and timestamps, and collapsed Thinking and Tool Calls callouts](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-session-to-markdown/screenshot-2.png)
+![A saved conversation file rendered in Obsidian: filename in the title-key-time pattern, frontmatter folded into the Properties panel, message blocks with role headers and timestamps, and collapsed Thinking and Tool Calls callouts](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-2.png)
 
 ### Fragmented thinking repair
 

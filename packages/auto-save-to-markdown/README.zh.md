@@ -1,6 +1,6 @@
-# pi-auto-save-session-to-markdown
+# pi-auto-save-to-markdown
 
-[![npm version](https://img.shields.io/npm/v/pi-auto-save-session-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/pi-auto-save-session-to-markdown)
+[![npm version](https://img.shields.io/npm/v/pi-auto-save-to-markdown?style=flat&colorA=222222&colorB=CB3837)](https://www.npmjs.com/package/pi-auto-save-to-markdown)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [English](README.md) | [中文](README.zh.md)
@@ -14,7 +14,7 @@ Pi 内部以 JSONL 树的形式记录会话，便于恢复却不便于阅读、�
 ## 安装
 
 ```
-pi install npm:pi-auto-save-session-to-markdown
+pi install npm:pi-auto-save-to-markdown
 ```
 
 ## 用法
@@ -146,11 +146,11 @@ Callout 本质是首行带类型标记的引用块（`> [!note] 标题`）：认
 
 同一个保存文件在 Obsidian 中的两种渲染视图——顶部为 `<标题>-<key>-<时间>.md` 文件名，消息块带角色信息头和时间戳，Thinking 与 Tool Calls 两个 callout 处于折叠状态。首先是 Properties 面板展开、展示全部 frontmatter 字段的效果：
 
-![保存的对话文件在 Obsidian 中渲染、Properties 面板展开的效果：文件名呈"标题-key-时间"格式，全部 frontmatter 字段以属性形式可见（title、agent、format_version、session_id、cost、tokens、时间戳、project_root、session_file），下方为消息正文开头](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-session-to-markdown/screenshot-1.png)
+![保存的对话文件在 Obsidian 中渲染、Properties 面板展开的效果：文件名呈"标题-key-时间"格式，全部 frontmatter 字段以属性形式可见（title、agent、format_version、session_id、cost、tokens、时间戳、project_root、session_file），下方为消息正文开头](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-1.png)
 
 然后是 Properties 面板折叠、完整对话正文的效果：
 
-![保存的对话文件在 Obsidian 中的渲染效果：文件名呈"标题-key-时间"格式，frontmatter 折叠在 Properties 面板中，消息块带角色信息头和时间戳，Thinking 与 Tool Calls callout 处于折叠状态](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-session-to-markdown/screenshot-2.png)
+![保存的对话文件在 Obsidian 中的渲染效果：文件名呈"标题-key-时间"格式，frontmatter 折叠在 Properties 面板中，消息块带角色信息头和时间戳，Thinking 与 Tool Calls callout 处于折叠状态](https://raw.githubusercontent.com/licongy/pi-claudian/master/packages/auto-save-to-markdown/screenshot-2.png)
 
 ### 碎片化 thinking 修复
 
